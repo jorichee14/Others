@@ -288,134 +288,140 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   drawRow(s, STEPS.slice(4), 1.2);
   s.addNotes('Detect sends one photo and gets the best mask back; depth stays on the robot. Grasp and hand over are local. Return uses the person position from the room cameras, with its time.');
 
-  // ---------- architecture as native shapes ----------
+  // ---------- architecture with data flow (native shapes) ----------
   pres.addSection({ title: 'Architecture' });
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
-  addT(s, 'System architecture', { placeholder: 'title' });
-  const KIND = {
-    hw: ['EEF0F3', 'C3C7CF', '333333'], loc: ['E4EEFB', 'A9C3EC', '1A5FD0'], task: ['EFEAFB', 'C3B2EC', '5B3FB0'],
-    per: ['FFF7E0', 'E9C46A', '8A6A00'], man: ['FDF3E4', 'EFCB96', '9A5B00'], twin: ['E4F4E9', '9FD3AE', '1D7A3A'],
-    com: ['DDF3F0', '0B7F74', '0B7F74'],
+  addT(s, 'System architecture and data flow', { placeholder: 'title' });
+  const ST = {
+    existing: { fill: 'F1F3F5', line: 'B8BEC6', dash: 'solid', w: 1, fg: '333333' },
+    nav: { fill: 'E4EEFB', line: 'A9C3EC', dash: 'solid', w: 1, fg: '1A5FD0' },
+    task: { fill: 'EFEAFB', line: 'C3B2EC', dash: 'solid', w: 1, fg: '5B3FB0' },
+    per: { fill: 'FFF7E0', line: 'E9C46A', dash: 'solid', w: 1, fg: '8A6A00' },
+    offline: { fill: 'E4F4E9', line: '9FD3AE', dash: 'solid', w: 1, fg: '1D7A3A' },
+    neu: { fill: 'DDF3F0', line: '0B7F74', dash: 'solid', w: 2, fg: '0B7F74' },
+    edit: { fill: 'FFFFFF', line: '0B7F74', dash: 'dash', w: 1.75, fg: '0B7F74' },
   };
-  const block = (sl, x, y, w, h, kind, title, right, body, name) => {
-    const [bg, bd, fg] = KIND[kind];
-    sl.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w, h, rectRadius: 0.06, fill: { color: bg },
-      line: { color: bd, width: kind === 'com' ? 1.75 : 1, dashType: kind === 'com' ? 'dash' : 'solid' },
-      objectName: name + ' block' });
-    addT(sl, title, { x: x + 0.1, y: y + 0.04, w: w * 0.55, h: 0.28, fontSize: 13, bold: true, color: fg,
+  const BADGE = { neu: ['NEW', '0B7F74', 'FFFFFF'], edit: ['EDITED', 'FFFFFF', '0B7F74'] };
+  const node = (x, y, w, h, kind, title, body, name, small) => {
+    const st = ST[kind];
+    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w, h, rectRadius: 0.06, fill: { color: st.fill },
+      line: { color: st.line, width: st.w, dashType: st.dash }, objectName: name + ' box' });
+    let tx = x + 0.08;
+    if (BADGE[kind]) {
+      const [lab, bg, fg] = BADGE[kind];
+      const bw = lab === 'NEW' ? 0.42 : 0.62;
+      addT(s, lab, { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.04, x: x + w - bw - 0.08, y: y + 0.07, w: bw, h: 0.2,
+        fill: { color: bg }, line: { color: '0B7F74', width: 0.75 }, fontSize: 8.5, bold: true, color: fg,
+        align: 'center', valign: 'middle', margin: 0, objectName: name + ' badge' });
+    }
+    addT(s, title, { x: tx, y: y + 0.04, w: w - 0.8, h: 0.27, fontSize: small ? 11 : 12, bold: true, color: st.fg,
       valign: 'middle', isTextBox: true, margin: 0, objectName: name + ' title' });
-    if (right) addT(sl, right, { x: x + w * 0.45, y: y + 0.04, w: w * 0.55 - 0.1, h: 0.28, fontSize: 10,
-      color: '666666', align: 'right', valign: 'middle', isTextBox: true, margin: 0, objectName: name + ' note' });
-    addT(sl, body, { x: x + 0.1, y: y + 0.32, w: w - 0.2, h: h - 0.36, fontSize: 11, color: '333333',
-      valign: 'top', isTextBox: true, margin: 0, paraSpaceAfter: 1, objectName: name + ' body' });
+    if (body) addT(s, body, { x: tx, y: y + 0.3, w: w - 0.16, h: h - 0.33, fontSize: 9.5, color: '333333',
+      valign: 'top', isTextBox: true, margin: 0, objectName: name + ' body' });
   };
-  // column headers
-  const RX = 0.5, RW = 5.05, MX = 5.75, MW = 2.05, SX = 8.0, SW = 4.83, Y0 = 1.5;
-  addT(s, 'ROBOT · Stretch · ROS 2', { x: RX, y: 1.12, w: RW, h: 0.3, fontSize: 13, bold: true, color: '333333', isTextBox: true, margin: 0, objectName: 'Robot header' });
-  addT(s, 'Wi-Fi', { x: MX, y: 1.12, w: MW, h: 0.3, fontSize: 13, bold: true, color: 'D6262C', align: 'center', isTextBox: true, margin: 0, objectName: 'WiFi header' });
-  addT(s, 'SERVER (GPU PC) + ROOM', { x: SX, y: 1.12, w: SW, h: 0.3, fontSize: 13, bold: true, color: '333333', isTextBox: true, margin: 0, objectName: 'Server header' });
-
-  // robot column
-  let y = Y0;
-  const rob = [
-    ['hw', 'Sensors + actuators', '', 'head RGB-D (D435) · gripper RGB-D (D405) · 2D lidar · IMU · base, lift, arm, wrist, gripper', 0.72],
-    ['loc', 'Localization + navigation', 'on the robot', 'AMCL on the 2D grid · Nav2 with its own costmap (obstacle avoidance)', 0.62],
-    ['task', 'Task executive', 'stage machine', 'acknowledge → navigate → open → pick → return → hand over', 0.55],
-    ['per', 'Perception', 'on the robot', 'mask × depth → 3-D points → centre · handle point + door plane · onboard YOLOE as fallback', 0.72],
-    ['man', 'Motion', 'on the robot', 'IK (pink) · arm trajectories · small base moves · gripper by effort', 0.55],
-  ];
-  rob.forEach(([k, t, r, b, h], i) => { block(s, RX, y, RW, h, k, t, r, b, 'Robot ' + i); y += h + 0.1; });
-  const rbY = y, rbH = 6.85 - y;
-  block(s, RX, rbY, RW, rbH, 'com', 'Comms bridge · robot', 'ROS 2 nodes', '', 'Robot bridge');
-  // comms nodes: [name, later?]
-  const drawNodes = (nodes, bx, by, bw, cols, prefix) => {
-    const gw = (bw - 0.2 - 0.08 * (cols - 1)) / cols;
-    nodes.forEach(([n, later], i) => {
-      const cx = bx + 0.1 + (i % cols) * (gw + 0.08), cy = by + 0.36 + Math.floor(i / cols) * 0.42;
-      addT(s, later ? [{ text: n, options: { breakLine: false } }, { text: '  later', options: { fontSize: 9, bold: false, italic: true } }] : n,
-        { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.05, x: cx, y: cy, w: gw, h: 0.34,
-          fill: { color: later ? 'F4FAF9' : 'FFFFFF' }, line: { color: later ? '8CC9C1' : '0B7F74', width: 1, dashType: later ? 'dash' : 'solid' },
-          fontSize: 11, bold: true, color: later ? '4F8F87' : '0B7F74', align: 'center', valign: 'middle', margin: 0,
-          objectName: prefix + ' node ' + n });
-    });
+  // arrow: from (x1,y1) to (x2,y2), straight; label optional
+  const flow = (x1, y1, x2, y2, color, label, lx, ly, lw, align, dash) => {
+    const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
+    const toEnd = (x2 >= x1 && y2 >= y1);
+    const opts = { x, y, w, h, line: { color, width: 1.75, dashType: dash || 'solid' }, objectName: 'flow ' + (label || '') };
+    if (toEnd) opts.line.endArrowType = 'triangle'; else opts.line.beginArrowType = 'triangle';
+    if ((x2 < x1) !== (y2 < y1) && w > 0 && h > 0) opts.flipV = true; // diagonal up-right / down-left
+    s.addShape(pres.shapes.LINE, opts);
+    if (label) addT(s, label, { x: lx, y: ly, w: lw, h: 0.24, fontSize: 9, color, bold: true, align: align || 'center',
+      valign: 'middle', isTextBox: true, margin: 0, objectName: 'label ' + label });
   };
-  drawNodes([['offload_client'], ['link_monitor'], ['comms_policy'], ['target_tracker'], ['keyframe_packer', 1], ['recorder', 1]],
-    RX, rbY, RW, 3, 'robot');
 
-  // server column
-  y = Y0;
-  const srv = [
-    ['twin', 'Map (offline)', '~16 h per run', 'Gaussian SLAM map · reference map + 2D grid · link map (from the map’s Sionna export + survey)', 0.78],
-    ['hw', 'Room cameras', 'wired · RGB only', 'calibrated in the map frame · depth rendered from the map · object and person detections', 0.72],
-    ['per', 'Object retrieval', 'online', 'keyframe search → SAM 3 → object cloud → object cache → target + view pose, with its age', 0.78],
-    ['twin', 'Asset layer', 'background · ≥32 GB GPU', 'SAM 3D asset per object · surfaces labelled measured / generated', 0.62],
-  ];
-  srv.forEach(([k, t, r, b, h], i) => { block(s, SX, y, SW, h, k, t, r, b, 'Server ' + i); y += h + 0.1; });
-  const sbY = y, sbH = 6.85 - y;
-  block(s, SX, sbY, SW, sbH, 'com', 'Comms bridge · server', 'ROS 2 nodes', '', 'Server bridge');
-  drawNodes([['offload_server'], ['target_server'], ['link_mapper'], ['logger'], ['keyframe_ingest', 1], ['gpu_scheduler', 1]],
-    SX, sbY, SW, 3, 'server');
+  // column headers and the Wi-Fi band
+  const RX = 0.5, RW = 4.5, SX = 8.33, SW = 4.5, BX = 5.25, BW = 2.83;
+  addT(s, 'ROBOT · Stretch · ROS 2', { x: RX, y: 1.08, w: RW, h: 0.28, fontSize: 12, bold: true, color: '333333', isTextBox: true, margin: 0, objectName: 'Robot header' });
+  addT(s, 'SERVER (GPU PC) + ROOM', { x: SX, y: 1.08, w: SW, h: 0.28, fontSize: 12, bold: true, color: '333333', isTextBox: true, margin: 0, objectName: 'Server header' });
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: BX, y: 1.08, w: BW, h: 5.0, rectRadius: 0.08, fill: { color: 'FFF7F7' },
+    line: { color: 'D6262C', width: 1.25, dashType: 'dash' }, objectName: 'WiFi band' });
+  addT(s, 'Wi-Fi', { x: BX, y: 1.12, w: BW, h: 0.26, fontSize: 12, bold: true, color: 'D6262C', align: 'center', isTextBox: true, margin: 0, objectName: 'WiFi header' });
 
-  // Wi-Fi column
-  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: MX, y: Y0, w: MW, h: 6.85 - Y0, rectRadius: 0.08,
-    fill: { color: 'FFF5F5' }, line: { color: 'D6262C', width: 1.25, dashType: 'dash' }, objectName: 'WiFi column' });
-  const tiers = [
-    ['Request · high', '0B7F74', 'FFFFFF', '↓ target + its age\n↑ one JPEG per look\n↓ mask / keypoint\n↑ robot pose\n↕ heartbeat', 1.55],
-    ['Background · low', 'CFEEE9', '0B5F57', '↑ keyframe packs, ~2 Hz, when the view changes; paused while detecting and grasping', 1.15],
-    ['Offline · lowest', 'E9ECEF', '444444', '↑ bags and full-rate frames, at the dock', 0.8],
-    ['Once', 'F3F3F3', '444444', '↑ calibration\n↓ 2D grid per map version', 0.72],
-  ];
-  y = Y0 + 0.1;
-  tiers.forEach(([t, bg, fg, body, h], i) => {
-    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: MX + 0.08, y, w: MW - 0.16, h, rectRadius: 0.05,
-      fill: { color: bg }, line: { color: bg }, objectName: 'tier ' + i });
-    addT(s, [{ text: t, options: { bold: true, fontSize: 11, breakLine: true } }, { text: body, options: { fontSize: 10 } }],
-      { x: MX + 0.14, y: y + 0.04, w: MW - 0.28, h: h - 0.08, color: fg, valign: 'top', isTextBox: true, margin: 0,
-        objectName: 'tier text ' + i });
-    y += h + 0.1;
+  // ---- robot ----
+  node(RX, 1.45, RW, 0.62, 'task', 'Task executive', 'acknowledge → navigate → open → pick → return → hand over', 'Task executive');
+  node(RX, 2.4, 1.75, 1.05, 'nav', 'Nav2 + AMCL', 'drives to the goal · avoids obstacles with its own costmap (2D lidar)', 'Nav2');
+  node(2.85, 2.4, 2.15, 1.05, 'neu', 'comms_node', 'holds targets + their age · goal to Nav2 · heartbeat, RSSI, link map → time limit · slow down / search · pauses background', 'comms_node');
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: RX, y: 3.78, w: RW, h: 1.32, rectRadius: 0.06, fill: { color: 'FFF7E0' },
+    line: { color: 'E9C46A', width: 1 }, objectName: 'grasp_server box' });
+  addT(s, 'grasp_server  (open · pick)', { x: RX + 0.08, y: 3.82, w: 2.1, h: 0.27, fontSize: 12, bold: true, color: '8A6A00', valign: 'middle', isTextBox: true, margin: 0, objectName: 'grasp_server title' });
+  addT(s, 'snapshot (D435 / D405) · mask × depth → 3-D point · IK · arm, gripper · door opening', { x: RX + 0.08, y: 4.1, w: 2.2, h: 0.95, fontSize: 9.5, color: '333333', valign: 'top', isTextBox: true, margin: 0, objectName: 'grasp_server body' });
+  node(2.85, 3.95, 2.07, 1.05, 'edit', 'detect client', 'resize · ID + capture time · time limit · one retry · drop old answers', 'detect client', true);
+  node(RX, 5.4, RW, 0.55, 'existing', 'CSV log', 'one line per request: times, sizes, step, RSSI, RTT, pose', 'Robot log', true);
+
+  // ---- server ----
+  node(SX, 1.45, 2.0, 0.62, 'offline', 'Map (offline)', 'Gaussian SLAM · 2D grid', 'Map');
+  node(10.83, 1.45, 2.0, 0.62, 'existing', 'Room cameras', 'wired · RGB · depth from the map', 'Room cameras', true);
+  node(SX, 2.4, 2.0, 1.05, 'neu', 'target_server', 'targets: cabinet, object, person · sent only on change · time seen, source, valid, last seen', 'target_server');
+  node(10.83, 2.4, 2.0, 1.05, 'per', 'Object retrieval', 'keyframe search → SAM 3 → object cloud → object cache (pose, ID, time seen)', 'Object retrieval');
+  node(SX, 3.95, SW, 1.05, 'edit', 'detector (mm_perception)', 'decode JPEG → YOLOE / SAM 3 → best mask · echo ID + server times · drop requests already too old · report queue', 'detector');
+  node(SX, 5.4, 2.0, 0.55, 'existing', 'CSV log', 'one line per request', 'Server log', true);
+  node(10.83, 5.4, 2.0, 0.55, 'offline', 'Link-map script', 'request time p50 / p95 per cell', 'Link map script', true);
+
+  // ---- flows on the robot ----
+  const K = '555555', T = '0B7F74';
+  flow(3.92, 2.07, 3.92, 2.4, K, 'step', 4.0, 2.11, 0.6, 'left');
+  flow(2.85, 2.92, 2.25, 2.92, T, '', 0, 0, 0);                 // comms_node -> Nav2
+  addT(s, 'goal ·\nspeed', { x: 2.25, y: 2.47, w: 0.6, h: 0.42, fontSize: 9, bold: true, color: T, align: 'center', valign: 'bottom', isTextBox: true, margin: 0, objectName: 'label goal' });
+  // task exec -> grasp_server, routed along the left margin
+  s.addShape(pres.shapes.LINE, { x: 0.32, y: 1.9, w: 0.18, h: 0, line: { color: K, width: 1.75 }, objectName: 'route a' });
+  s.addShape(pres.shapes.LINE, { x: 0.32, y: 1.9, w: 0, h: 2.55, line: { color: K, width: 1.75 }, objectName: 'route b' });
+  s.addShape(pres.shapes.LINE, { x: 0.32, y: 4.45, w: 0.18, h: 0, line: { color: K, width: 1.75, endArrowType: 'triangle' }, objectName: 'route c' });
+  flow(3.92, 3.45, 3.92, 3.95, T, 'time limit · pause', 3.98, 3.58, 1.0, 'left');
+  flow(2.85, 4.48, 2.6, 4.48, K, '', 0, 0, 0);                  // detect client -> grasp (mask)
+  flow(2.2, 5.1, 2.2, 5.4, K, '', 0, 0, 0, null, 'dash');       // grasp -> log
+  // ---- flows on the server ----
+  flow(11.83, 2.07, 11.83, 2.4, K, 'images', 11.9, 2.11, 0.8, 'left');
+  flow(10.33, 2.07, 10.95, 2.4, K, '', 0, 0, 0);                // map -> retrieval (diagonal)
+  flow(10.83, 2.92, 10.33, 2.92, K, '', 0, 0, 0);               // retrieval -> target_server
+  addT(s, 'poses +\ntime', { x: 10.33, y: 2.47, w: 0.5, h: 0.42, fontSize: 9, bold: true, color: K, align: 'center', valign: 'bottom', isTextBox: true, margin: 0, objectName: 'label poses' });
+  flow(9.4, 5.0, 9.4, 5.4, K, '', 0, 0, 0, null, 'dash');       // detector -> log
+  flow(10.33, 5.67, 10.83, 5.67, K, '', 0, 0, 0, null, 'dash'); // log -> link map script
+
+  // ---- flows across the Wi-Fi ----
+  flow(SX, 2.68, 5.0, 2.68, T, 'targets on change · time seen · valid', BX + 0.05, 2.42, BW - 0.1);
+  flow(5.0, 3.18, SX, 3.18, T, 'refresh · robot pose · heartbeat', BX + 0.05, 2.92, BW - 0.1);
+  flow(4.92, 4.23, SX, 4.23, T, 'one JPEG + ID + capture time', BX + 0.05, 3.97, BW - 0.1);
+  flow(SX, 4.73, 4.92, 4.73, T, 'best mask + ID + server times', BX + 0.05, 4.47, BW - 0.1);
+  flow(5.0, 5.67, SX, 5.67, K, 'logs, after the run', BX + 0.05, 5.41, BW - 0.1, 'center', 'dash');
+
+  // legend
+  const LG = [['neu', 'new node'], ['edit', 'edit to their code'], ['existing', 'existing'], ['offline', 'offline']];
+  LG.forEach(([k, lab], i) => {
+    const st = ST[k], lx = 0.5 + i * 2.35;
+    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: lx, y: 6.3, w: 0.36, h: 0.22, rectRadius: 0.04, fill: { color: st.fill },
+      line: { color: st.line, width: st.w, dashType: st.dash }, objectName: 'legend ' + lab });
+    addT(s, lab, { x: lx + 0.45, y: 6.28, w: 1.8, h: 0.26, fontSize: 11, color: '444444', valign: 'middle', isTextBox: true, margin: 0, objectName: 'legend text ' + lab });
   });
-  addT(s, [{ text: 'Never sent', options: { bold: true, breakLine: true } }, { text: 'raw video, depth images, lidar scans' }],
-    { x: MX + 0.08, y, w: MW - 0.16, h: 6.85 - 0.08 - y, fontSize: 10, color: 'A3171D', valign: 'top',
-      isTextBox: true, margin: 2, objectName: 'never sent' });
-  // links between bridges and the Wi-Fi column
-  s.addShape(pres.shapes.LINE, { x: RX + RW, y: rbY + 0.6, w: MX + 0.08 - (RX + RW), h: 0,
-    line: { color: '0B7F74', width: 2.5, beginArrowType: 'triangle', endArrowType: 'triangle' }, objectName: 'robot link' });
-  s.addShape(pres.shapes.LINE, { x: MX + MW - 0.08, y: sbY + 0.6, w: SX - (MX + MW - 0.08), h: 0,
-    line: { color: '0B7F74', width: 2.5, beginArrowType: 'triangle', endArrowType: 'triangle' }, objectName: 'server link' });
-  addT(s, 'messages: Target (pose, time seen, source, validity) · LinkState (RTT, RSSI, queue, predicted request time) · Detect (+ ID, times)',
-    { x: RX + 0.1, y: rbY + rbH - 0.5, w: RW - 0.2, h: 0.42, fontSize: 11, color: '174F49', italic: true,
-      valign: 'bottom', isTextBox: true, margin: 0, objectName: 'Robot bridge note' });
-  addT(s, 'targets sent only on change, with their age · link map = request time p50/p95 + failures per cell, not just RSSI',
-    { x: SX + 0.1, y: sbY + sbH - 0.5, w: SW - 0.2, h: 0.42, fontSize: 11, color: '174F49', italic: true,
-      valign: 'bottom', isTextBox: true, margin: 0, objectName: 'Server bridge note' });
-  s.addNotes('Left: everything on the robot. Middle: the Wi-Fi, with four traffic tiers. Right: the server and the wired room cameras. The teal dashed blocks are the comms side.');
+  s.addShape(pres.shapes.LINE, { x: 9.9, y: 6.41, w: 0.4, h: 0, line: { color: T, width: 1.75, endArrowType: 'triangle' }, objectName: 'legend comms arrow' });
+  addT(s, 'comms flow', { x: 10.38, y: 6.28, w: 1.2, h: 0.26, fontSize: 11, color: '444444', valign: 'middle', isTextBox: true, margin: 0, objectName: 'legend comms text' });
+  s.addShape(pres.shapes.LINE, { x: 11.55, y: 6.41, w: 0.4, h: 0, line: { color: K, width: 1.75, endArrowType: 'triangle' }, objectName: 'legend local arrow' });
+  addT(s, 'local flow', { x: 12.03, y: 6.28, w: 0.85, h: 0.26, fontSize: 11, color: '444444', valign: 'middle', isTextBox: true, margin: 0, objectName: 'legend local text' });
+  s.addNotes('Teal arrows cross the Wi-Fi: targets down (only when they change), refresh and heartbeat up, one photo per look up, the best mask back. Grey arrows stay on one machine. New: comms_node and target_server. Edited: their detect client and detector. Offline: map and link-map script.');
 
-  // ---------- the comms side ----------
+  // ---------- the comms pieces ----------
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
-  addT(s, 'The comms side', { placeholder: 'title' });
+  addT(s, 'The comms pieces', { placeholder: 'title' });
   const wcell = (t, bg, fg) => ({ text: t, options: { bold: true, color: fg, fill: { color: bg } } });
   const hd = (t) => ({ text: t, options: { bold: true, color: 'FFFFFF', fill: { color: '0B3D3A' } } });
-  const R_ = (t) => wcell(t, 'DFF3E6', '1F6F43'), S_ = (t) => wcell(t, 'ECE6FB', '5B3FB0'), B_ = (t) => wcell(t, 'EEF0F3', '333333');
-  const nm = (t, later) => ({ text: later ? t + '  (later)' : t, options: { bold: true, color: later ? '4F8F87' : '1D1D1F' } });
+  const R_ = (t) => wcell(t, 'DFF3E6', '1F6F43'), S_ = (t) => wcell(t, 'ECE6FB', '5B3FB0'), O_ = (t) => wcell(t, 'E4F4E9', '1D7A3A');
+  const nm = (t, kind) => ({ text: t, options: { bold: true, color: kind === 'later' ? '4F8F87' : '1D1D1F' } });
   const crow = [
-    [hd('Node'), hd('Where'), hd('What it does')],
-    [nm('offload_client'), R_('Robot'), 'One photo per look (resized or cropped JPEG, with ID, capture time and pose); waits up to the time limit; retries; drops old answers'],
-    [nm('link_monitor'), R_('Robot'), 'Heartbeat (RTT, server queue) + RSSI + link map at the current and next position → predicted request time (p50 / p95)'],
-    [nm('comms_policy'), R_('Robot'), 'Per step: time limit, retry or onboard fallback, speed limit when targets are old, pause / resume background traffic'],
-    [nm('target_tracker'), R_('Robot'), 'Latest target per type (object, person) with its age and source; checks validity; asks for a refresh when old; goal to Nav2'],
-    [nm('keyframe_packer', 1), R_('Robot'), 'Map updates when the view changes; paused while detecting and grasping'],
-    [nm('recorder', 1), R_('Robot'), 'Full-rate data and bags to disk; uploaded at the dock'],
-    [nm('offload_server'), S_('Server'), 'Wraps detect: runs YOLOE / SAM 3, answers with the same ID and server times, drops requests already too old, reports its queue'],
-    [nm('target_server'), S_('Server'), 'Room-camera detections + object cache → targets, sent only on change, with time seen, source, validity, verified / last seen'],
-    [nm('link_mapper'), S_('Server'), 'Link map per cell: request time p50 / p95, failure rate, RTT, RSSI; from a survey drive, then from every logged request'],
-    [nm('logger'), S_('Server'), 'Every request: time at each hop, sizes, step, RSSI, RTT, pose → where the time goes'],
-    [nm('keyframe_ingest', 1), S_('Server'), 'Receives map updates, fills gaps after a pause'],
-    [nm('gpu_scheduler', 1), S_('Server'), 'Runs pick requests before map training and SAM 3D'],
+    [hd('Piece'), hd('Type'), hd('Where'), hd('What it does')],
+    [nm('detect client'), 'edit to locator.py', R_('Robot'), 'One photo per look (resized, with ID, capture time and pose); time limit; one retry; drops answers for old photos; logs a CSV line'],
+    [nm('detector'), 'edit to detector_node.py', S_('Server'), 'Echoes the ID; adds server times; returns the best mask only; drops requests already too old; reports its queue; logs a CSV line'],
+    [nm('target_server'), 'new node', S_('Server'), 'Room-camera detections + object cache → targets (cabinet, object, person), sent only on change, with time seen, source, validity, last seen'],
+    [nm('comms_node'), 'new node', R_('Robot'), 'Holds targets and their age; goal to Nav2; asks for a refresh; heartbeat + RSSI + link map → time limit; slows down, searches in blind areas; pauses background traffic'],
+    [nm('link-map script'), 'offline script', O_('Offline'), 'From the survey drive and the CSV logs: request time p50 / p95 and failures per cell; only if the survey shows slow spots'],
+    [nm('keyframe_packer / ingest', 'later'), 'later, if needed', R_('Both'), 'Only if map updates run during tasks: sent when the view changes, paused during detect and grasp'],
   ];
-  s.addTable(crow, { x: 0.5, y: 1.2, w: 12.33, colW: [2.35, 1.0, 8.98], fontSize: 12, fontFace: FONT, color: '1D1D1F',
+  s.addTable(crow, { x: 0.5, y: 1.25, w: 12.33, colW: [2.2, 1.95, 1.0, 7.18], fontSize: 12, fontFace: FONT, color: '1D1D1F',
     border: { type: 'solid', pt: 0.75, color: 'C8D6D3' }, fill: { color: 'FFFFFF' }, valign: 'middle',
-    rowH: [0.38, ...Array(12).fill(0.42)], objectName: 'Comms nodes' });
-  s.addNotes('The comms side is two small sets of ROS 2 nodes, one on each machine, plus the link map. They wrap the one network call in the existing grasp code and manage the background traffic.');
+    rowH: [0.4, 0.62, 0.62, 0.62, 0.72, 0.62, 0.62], objectName: 'Comms pieces' });
+  addT(s, 'Two edits to their code, two new nodes, one offline script.', { x: 0.5, y: 5.75, w: 12.33, h: 0.4, fontSize: 16,
+    bold: true, color: '0B7F74', isTextBox: true, margin: 0, objectName: 'Summary line' });
+  s.addNotes('This is the whole comms side for the full task. Everything else (Nav2, perception, motion) stays as it is.');
 
   // 8 What crosses the Wi-Fi
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
