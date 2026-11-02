@@ -26,6 +26,7 @@ cd nest-splatting && git checkout 058a3df
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_lidar.patch
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_session_color.patch   # on top: one colour response per camera id
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_blur_loss.patch       # on top of that: blur-matched loss
+git apply ~/workspaces/Others/scoop_pipeline/nest/nest_load_levels.patch     # a loaded model renders every texture level
 git submodule update --init --recursive
 conda env create -f environment.yml        # the conda half succeeds; the pip half fails -- expected
 conda activate nest_splatting
@@ -158,3 +159,23 @@ python3 ~/workspaces/Others/scoop_pipeline/datasets/blur_levels.py <scene>     #
 (each frame against the sharpest frame within ten of it, the same view a moment
 apart, so a bare wall is not taken for blur). Switched on by
 `training_cfg.blur_match: true`; train.py prints how many frames it applies to.
+
+## Loaded models and texture levels
+
+NeST's `load_ply` sets every surfel's appearance level to 6, and the
+rasteriser computes only `min(appearance level, levels)` hash levels per
+surfel; training creates surfels at 24. With the six-level yaml that never
+mattered. With `scoop_indoor_fine.yaml` (eight levels) every loaded model,
+so `eval_render.py` and the flythrough, drew without the two finest levels
+and fed the colour network zeros where it had learned features.
+`nest_load_levels.patch` sets 24 on load. Numbers for eight-level models
+evaluated before it are low.
+
+## Flythrough
+
+`nest_fly.py` flies a model along the lap the other videos use. By default it
+uses the training camera's field of view and aspect, and draws surfels that
+fewer than three training cameras saw (in frame, in front, not behind the
+LiDAR depth) with three texture levels only: the fine hash levels are shared
+between places, so on a surface nobody photographed they hold another
+place's detail.

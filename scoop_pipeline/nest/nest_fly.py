@@ -9,7 +9,20 @@ videos (cloud, Sionna, splats, this) line up frame for frame:
     python ~/workspaces/Others/scoop_pipeline/nest/nest_fly.py -s <scene> -m <model> \\
         --yaml configs/<yaml> --iteration 140000 \\
         --fly <mesh>_fly_path.json out.mp4 --frame <anchor_frame.json> [--eye-shift DZ] \\
-        [--size 1280x720] [--fov 70]
+        [--width 1280] [--unseen-level 3] [--min-views 3]
+
+The camera is the robot's own by default: the training camera's vertical
+field of view and aspect, so the frame holds what the camera could have
+seen (--fov / --size to override). A wider view shows the ceiling and the
+floor under the robot, which no photograph holds.
+
+Surfaces no training photograph saw get only the coarse texture levels
+(--unseen-level): a surfel counts as seen when it lies inside a training
+camera's frame, in front of it, and not behind the LiDAR depth there, in
+at least --min-views cameras. The fine levels of the hash grid are shared
+between places by hashing, so on a surface nobody trained they hold another
+place's detail: the noisy ceiling. The coarse levels give it a smooth,
+plausible colour instead. --unseen-level 24 turns this off.
 
 The path's eye and look points (z up, the anchored frame) are moved into the
 model's frame with the inverse of the anchor's T_N_world, as splat_walk does;
@@ -56,6 +69,51 @@ class FlyCamera:
         self.colmap_id = 1
 
 
+def lidar_depth(path, H, W, torch, device="cuda"):
+    """<scene>/depths/<name>.png in metres on the GPU (0 where no return); None if missing."""
+    import cv2
+    png = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if png is None:
+        return None
+    grey = (png[:, :, 0] if png.ndim == 3 else png).astype(np.float32) / 255.0
+    metres = np.where(grey < 0.5, 20.0 * grey, 5.0 / np.maximum(1.0 - grey, 1e-6))
+    valid = png[:, :, 3] > 0 if png.ndim == 3 and png.shape[2] == 4 else grey > 0
+    metres[~valid] = 0.0
+    d = torch.from_numpy(metres).to(device)
+    if d.shape != (H, W):
+        d = torch.nn.functional.interpolate(d[None, None], (H, W), mode="nearest")[0, 0]
+    return d
+
+
+def seen_counts(xyz, cameras, source_path, torch, margin=0.10):
+    """Per surfel: how many training cameras see it -- inside the frame, in front,
+    and not more than `margin` (plus 5%) behind the LiDAR depth at its pixel."""
+    count = torch.zeros(len(xyz), dtype=torch.int32, device=xyz.device)
+    ones = torch.ones((len(xyz), 1), device=xyz.device)
+    X = torch.cat([xyz, ones], 1)
+    print(f"visibility of {len(xyz)} surfels from {len(cameras)} training cameras ...", flush=True)
+    for k, cam in enumerate(cameras):
+        W, H = cam.image_width, cam.image_height
+        d = lidar_depth(os.path.join(source_path, "depths", cam.image_name + ".png"), H, W, torch, xyz.device)
+        if d is None:
+            continue
+        p = X @ cam.world_view_transform                 # row vectors: camera frame (x right, y down, z fwd)
+        z = p[:, 2]
+        fx = W / (2 * math.tan(cam.FoVx / 2))
+        fy = H / (2 * math.tan(cam.FoVy / 2))
+        zs = z.clamp(min=1e-3)
+        u = (p[:, 0] / zs * fx + W / 2).long()
+        v = (p[:, 1] / zs * fy + H / 2).long()
+        ok = (z > 0.05) & (u >= 0) & (u < W) & (v >= 0) & (v < H)
+        idx = ok.nonzero(as_tuple=True)[0]
+        dz = d[v[idx], u[idx]]
+        vis = (dz > 0) & (z[idx] <= dz * 1.05 + margin)
+        count[idx[vis]] += 1
+        if k % 500 == 0:
+            print(f"  {k} of {len(cameras)}", flush=True)
+    return count
+
+
 def video_writer(out, fps, size):
     if shutil.which("ffmpeg"):
         p = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
@@ -87,8 +145,12 @@ def main():
     parser.add_argument("--fly", nargs=2, required=True, metavar=("PATH_JSON", "OUT_MP4"))
     parser.add_argument("--frame", default="", help="anchor_frame.json: the path is in the anchored frame")
     parser.add_argument("--eye-shift", type=float, default=0.0, metavar="DZ", help="raise (+) or lower the eye (m)")
-    parser.add_argument("--size", default="1280x720", help="WxH")
-    parser.add_argument("--fov", type=float, default=70.0, help="vertical field of view (deg)")
+    parser.add_argument("--size", default="", help="WxH (default: --width at the training camera's aspect)")
+    parser.add_argument("--width", type=int, default=1280, help="frame width when --size is not given")
+    parser.add_argument("--fov", type=float, default=0.0, help="vertical field of view (deg; default: the training camera's)")
+    parser.add_argument("--unseen-level", type=int, default=3,
+                        help="texture levels for surfels no training camera saw (24: all, as for seen ones)")
+    parser.add_argument("--min-views", type=int, default=3, help="training cameras that must see a surfel to count it seen")
     parser.add_argument("--start", type=int, default=0, help="first frame of the path to render")
     parser.add_argument("--count", type=int, default=0, help="frames to render (0: to the end)")
     args = get_combined_args(parser)
@@ -107,8 +169,6 @@ def main():
         E = E @ Ti[:3, :3].T + Ti[:3, 3]
         Lk = Lk @ Ti[:3, :3].T + Ti[:3, 3]
     fps = int(pj.get("fps", 30))
-    W, H = (int(v) for v in args.size.lower().split("x"))
-    W, H = W - W % 2, H - H % 2
     stop = len(E) if args.count <= 0 else min(len(E), args.start + args.count)
 
     ingp_model = INGP(cfg_model).to("cuda")
@@ -122,13 +182,33 @@ def main():
     beta = cfg_model.surfel.tg_beta
     gaussians.XYZ_TYPE = "UV"
     ingp_model.set_active_levels(args.iteration)
+    gaussians._appearance_level.data[:] = 24        # every level (a loaded model is otherwise capped at six)
+
+    train = scene.getTrainCameras()
+    c0 = train[0]
+    fov = args.fov if args.fov > 0 else math.degrees(c0.FoVy)
+    if args.size:
+        W, H = (int(v) for v in args.size.lower().split("x"))
+    else:
+        W = args.width
+        H = int(round(W * c0.image_height / c0.image_width))
+    W, H = W - W % 2, H - H % 2
+    print(f"camera: {W}x{H}, vertical field of view {fov:.1f} deg "
+          f"(training camera {c0.image_width}x{c0.image_height}, {math.degrees(c0.FoVy):.1f} deg)", flush=True)
+
+    if args.unseen_level < 24:
+        seen = seen_counts(gaussians.get_xyz.detach(), train, dataset.source_path, torch)
+        unseen = seen < args.min_views
+        gaussians._appearance_level.data[unseen] = float(args.unseen_level)
+        print(f"surfels seen by fewer than {args.min_views} training cameras: {int(unseen.sum())} of {len(seen)} "
+              f"({100.0 * unseen.float().mean().item():.1f}%), drawn with {args.unseen_level} texture levels", flush=True)
     up = np.array([0.0, 0.0, 1.0])
     out = os.path.expanduser(args.fly[1])
     write, release = video_writer(out, fps, (W, H))
     print(f"flying frames {args.start}..{stop - 1} of {len(E)} at {fps} fps, {W}x{H} -> {out}", flush=True)
     with torch.no_grad():
         for i in range(args.start, stop):
-            cam = FlyCamera(E[i], Lk[i], up, W, H, args.fov, torch, getProjectionMatrix)
+            cam = FlyCamera(E[i], Lk[i], up, W, H, fov, torch, getProjectionMatrix)
             img = render(cam, gaussians, pipe, background, ingp=ingp_model, beta=beta,
                          iteration=args.iteration, cfg=cfg_model)["render"]
             rgb = (img.clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
