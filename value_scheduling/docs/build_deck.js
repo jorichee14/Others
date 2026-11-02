@@ -288,41 +288,134 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   drawRow(s, STEPS.slice(4), 1.2);
   s.addNotes('Detect sends one photo and gets the best mask back; depth stays on the robot. Grasp and hand over are local. Return uses the person position from the room cameras, with its time.');
 
-  // 5 Architecture
+  // ---------- architecture as native shapes ----------
   pres.addSection({ title: 'Architecture' });
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
   addT(s, 'System architecture', { placeholder: 'title' });
-  const a = fitImage(s, 'arch_full.png', { x: 0.5, y: 1.2, w: 8.9, h: 5.7 }, 'System architecture');
-  const ax = a.x + a.w + 0.35, aw = 12.83 - ax;
-  card(s, ax, 1.2, aw, 1.75, 'Robot', 'Sensors, localization, task executive, object fusion, motion, and the robot side of the comms bridge.', 'E4EEFB', C.accent2, 'Robot');
-  card(s, ax, 3.1, aw, 1.75, 'Server', 'Gaussian SLAM map, room cameras, object retrieval, asset layer, and the server side of the comms bridge.', 'EFEAFB', C.accent4, 'Server');
-  card(s, ax, 5.0, aw, 1.75, 'Link', 'Four tiers: request (pick), background (keyframe packs), offline (bags at the dock), once (calibration, map).', 'DDF3F0', C.accent1, 'Link');
-  s.addNotes('Left: everything on the robot. Right: everything on the server. The red dashed line is the Wi-Fi.');
+  const KIND = {
+    hw: ['EEF0F3', 'C3C7CF', '333333'], loc: ['E4EEFB', 'A9C3EC', '1A5FD0'], task: ['EFEAFB', 'C3B2EC', '5B3FB0'],
+    per: ['FFF7E0', 'E9C46A', '8A6A00'], man: ['FDF3E4', 'EFCB96', '9A5B00'], twin: ['E4F4E9', '9FD3AE', '1D7A3A'],
+    com: ['DDF3F0', '0B7F74', '0B7F74'],
+  };
+  const block = (sl, x, y, w, h, kind, title, right, body, name) => {
+    const [bg, bd, fg] = KIND[kind];
+    sl.addShape(pres.shapes.ROUNDED_RECTANGLE, { x, y, w, h, rectRadius: 0.06, fill: { color: bg },
+      line: { color: bd, width: kind === 'com' ? 1.75 : 1, dashType: kind === 'com' ? 'dash' : 'solid' },
+      objectName: name + ' block' });
+    addT(sl, title, { x: x + 0.1, y: y + 0.04, w: w * 0.55, h: 0.28, fontSize: 13, bold: true, color: fg,
+      valign: 'middle', isTextBox: true, margin: 0, objectName: name + ' title' });
+    if (right) addT(sl, right, { x: x + w * 0.45, y: y + 0.04, w: w * 0.55 - 0.1, h: 0.28, fontSize: 10,
+      color: '666666', align: 'right', valign: 'middle', isTextBox: true, margin: 0, objectName: name + ' note' });
+    addT(sl, body, { x: x + 0.1, y: y + 0.32, w: w - 0.2, h: h - 0.36, fontSize: 11, color: '333333',
+      valign: 'top', isTextBox: true, margin: 0, paraSpaceAfter: 1, objectName: name + ' body' });
+  };
+  // column headers
+  const RX = 0.5, RW = 5.05, MX = 5.75, MW = 2.05, SX = 8.0, SW = 4.83, Y0 = 1.5;
+  addT(s, 'ROBOT · Stretch · ROS 2', { x: RX, y: 1.12, w: RW, h: 0.3, fontSize: 13, bold: true, color: '333333', isTextBox: true, margin: 0, objectName: 'Robot header' });
+  addT(s, 'Wi-Fi', { x: MX, y: 1.12, w: MW, h: 0.3, fontSize: 13, bold: true, color: 'D6262C', align: 'center', isTextBox: true, margin: 0, objectName: 'WiFi header' });
+  addT(s, 'SERVER (GPU PC) + ROOM', { x: SX, y: 1.12, w: SW, h: 0.3, fontSize: 13, bold: true, color: '333333', isTextBox: true, margin: 0, objectName: 'Server header' });
 
-  // 6 Robot side
-  s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
-  addT(s, 'Robot side: time-critical work stays local', { placeholder: 'title' });
-  const rb = fitImage(s, 'arch_robot.png', { x: 0.5, y: 1.2, w: 4.2, h: 5.7 }, 'Robot side of the architecture');
-  const rx = rb.x + rb.w + 0.45, rw = 12.83 - rx;
-  card(s, rx, 1.2, rw, 1.65, 'Runs on the robot', 'Localization (AMCL / LiDAR-inertial odometry), Nav2 with obstacle avoidance, mask × depth → 3-D points, IK, arm and gripper.', 'E4EEFB', C.accent2, 'Local');
-  card(s, rx, 3.0, rw, 1.95, 'Comms bridge (robot)', 'offload_client: one photo per look, with ID and capture time · keyframe_packer: background, paused during the pick · recorder: full-rate data to disk, uploaded at the dock · link_monitor: RTT, RSSI, server queue · policy: wait, retry or fall back.', 'DDF3F0', C.accent1, 'Bridge');
-  card(s, rx, 5.1, rw, 1.65, 'When an answer is late', 'Retry once with a new photo, keep driving to the current goal, slow down near the person, or use the onboard detector.', 'FBE9E7', C.accent3, 'Late');
-  s.addNotes('The robot never needs the server to stay safe or to move; it needs the server only for the big models.');
+  // robot column
+  let y = Y0;
+  const rob = [
+    ['hw', 'Sensors + actuators', '', 'head RGB-D (D435) · gripper RGB-D (D405) · 2D lidar · IMU · base, lift, arm, wrist, gripper', 0.72],
+    ['loc', 'Localization + navigation', 'on the robot', 'AMCL on the 2D grid · Nav2 with its own costmap (obstacle avoidance)', 0.62],
+    ['task', 'Task executive', 'stage machine', 'acknowledge → navigate → open → pick → return → hand over', 0.55],
+    ['per', 'Perception', 'on the robot', 'mask × depth → 3-D points → centre · handle point + door plane · onboard YOLOE as fallback', 0.72],
+    ['man', 'Motion', 'on the robot', 'IK (pink) · arm trajectories · small base moves · gripper by effort', 0.55],
+  ];
+  rob.forEach(([k, t, r, b, h], i) => { block(s, RX, y, RW, h, k, t, r, b, 'Robot ' + i); y += h + 0.1; });
+  const rbY = y, rbH = 6.85 - y;
+  block(s, RX, rbY, RW, rbH, 'com', 'Comms bridge · robot', 'ROS 2 nodes', '', 'Robot bridge');
+  const rnodes = ['offload_client', 'link_monitor', 'policy', 'keyframe_packer', 'recorder'];
+  const nw = (RW - 0.2 - 0.08 * 2) / 3;
+  rnodes.forEach((n, i) => {
+    const cx = RX + 0.1 + (i % 3) * (nw + 0.08), cy = rbY + 0.36 + Math.floor(i / 3) * 0.42;
+    addT(s, n, { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.05, x: cx, y: cy, w: nw, h: 0.34,
+      fill: { color: 'FFFFFF' }, line: { color: '0B7F74', width: 1 }, fontSize: 11, bold: true, color: '0B7F74',
+      align: 'center', valign: 'middle', margin: 0, objectName: 'node ' + n });
+  });
 
-  // 7 Server side
+  // server column
+  y = Y0;
+  const srv = [
+    ['twin', 'Map (offline)', '~16 h per run', 'Gaussian SLAM map · reference map + 2D grid · link map (from the map’s Sionna export + survey)', 0.78],
+    ['hw', 'Room cameras', 'wired · RGB only', 'calibrated in the map frame · depth rendered from the map · object and person detections', 0.72],
+    ['per', 'Object retrieval', 'online', 'keyframe search → SAM 3 → object cloud → object cache → target + view pose, with its age', 0.78],
+    ['twin', 'Asset layer', 'background · ≥32 GB GPU', 'SAM 3D asset per object · surfaces labelled measured / generated', 0.62],
+  ];
+  srv.forEach(([k, t, r, b, h], i) => { block(s, SX, y, SW, h, k, t, r, b, 'Server ' + i); y += h + 0.1; });
+  const sbY = y, sbH = 6.85 - y;
+  block(s, SX, sbY, SW, sbH, 'com', 'Comms bridge · server', 'ROS 2 nodes', '', 'Server bridge');
+  const snodes = ['offload_server', 'keyframe_ingest', 'GPU scheduler', 'logger'];
+  const sw2 = (SW - 0.2 - 0.08) / 2;
+  snodes.forEach((n, i) => {
+    const cx = SX + 0.1 + (i % 2) * (sw2 + 0.08), cy = sbY + 0.36 + Math.floor(i / 2) * 0.42;
+    addT(s, n, { shape: pres.shapes.ROUNDED_RECTANGLE, rectRadius: 0.05, x: cx, y: cy, w: sw2, h: 0.34,
+      fill: { color: 'FFFFFF' }, line: { color: '0B7F74', width: 1 }, fontSize: 11, bold: true, color: '0B7F74',
+      align: 'center', valign: 'middle', margin: 0, objectName: 'node ' + n });
+  });
+
+  // Wi-Fi column
+  s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: MX, y: Y0, w: MW, h: 6.85 - Y0, rectRadius: 0.08,
+    fill: { color: 'FFF5F5' }, line: { color: 'D6262C', width: 1.25, dashType: 'dash' }, objectName: 'WiFi column' });
+  const tiers = [
+    ['Request · high', '0B7F74', 'FFFFFF', '↓ target + its age\n↑ one JPEG per look\n↓ mask / keypoint\n↑ robot pose\n↕ heartbeat', 1.55],
+    ['Background · low', 'CFEEE9', '0B5F57', '↑ keyframe packs, ~2 Hz, when the view changes; paused while detecting and grasping', 1.15],
+    ['Offline · lowest', 'E9ECEF', '444444', '↑ bags and full-rate frames, at the dock', 0.8],
+    ['Once', 'F3F3F3', '444444', '↑ calibration\n↓ 2D grid per map version', 0.72],
+  ];
+  y = Y0 + 0.1;
+  tiers.forEach(([t, bg, fg, body, h], i) => {
+    s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: MX + 0.08, y, w: MW - 0.16, h, rectRadius: 0.05,
+      fill: { color: bg }, line: { color: bg }, objectName: 'tier ' + i });
+    addT(s, [{ text: t, options: { bold: true, fontSize: 11, breakLine: true } }, { text: body, options: { fontSize: 10 } }],
+      { x: MX + 0.14, y: y + 0.04, w: MW - 0.28, h: h - 0.08, color: fg, valign: 'top', isTextBox: true, margin: 0,
+        objectName: 'tier text ' + i });
+    y += h + 0.1;
+  });
+  addT(s, [{ text: 'Never sent', options: { bold: true, breakLine: true } }, { text: 'raw video, depth images, lidar scans' }],
+    { x: MX + 0.08, y, w: MW - 0.16, h: 6.85 - 0.08 - y, fontSize: 10, color: 'A3171D', valign: 'top',
+      isTextBox: true, margin: 2, objectName: 'never sent' });
+  // links between bridges and the Wi-Fi column
+  s.addShape(pres.shapes.LINE, { x: RX + RW, y: rbY + 0.6, w: MX + 0.08 - (RX + RW), h: 0,
+    line: { color: '0B7F74', width: 2.5, beginArrowType: 'triangle', endArrowType: 'triangle' }, objectName: 'robot link' });
+  s.addShape(pres.shapes.LINE, { x: MX + MW - 0.08, y: sbY + 0.6, w: SX - (MX + MW - 0.08), h: 0,
+    line: { color: '0B7F74', width: 2.5, beginArrowType: 'triangle', endArrowType: 'triangle' }, objectName: 'server link' });
+  addT(s, 'wraps the one network call per look; sends background and offline traffic only when the pick allows',
+    { x: RX + 0.1, y: rbY + rbH - 0.5, w: RW - 0.2, h: 0.42, fontSize: 11, color: '174F49', italic: true,
+      valign: 'bottom', isTextBox: true, margin: 0, objectName: 'Robot bridge note' });
+  addT(s, 'answers requests by ID and age; takes in keyframe packs; serves pick requests first on the GPU; logs every hop',
+    { x: SX + 0.1, y: sbY + sbH - 0.5, w: SW - 0.2, h: 0.42, fontSize: 11, color: '174F49', italic: true,
+      valign: 'bottom', isTextBox: true, margin: 0, objectName: 'Server bridge note' });
+  s.addNotes('Left: everything on the robot. Middle: the Wi-Fi, with four traffic tiers. Right: the server and the wired room cameras. The teal dashed blocks are the comms side.');
+
+  // ---------- the comms side ----------
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
-  addT(s, 'Server side: map, retrieval, assets', { placeholder: 'title' });
-  const sb = fitImage(s, 'arch_server.png', { x: 0.5, y: 1.2, w: 6.2, h: 5.7 }, 'Server side of the architecture');
-  const sx = sb.x + sb.w + 0.45, sw = 12.83 - sx;
-  card(s, sx, 1.2, sw, 1.4, 'Offline', 'Gaussian SLAM map (~16 h per run), link map seeded from its Sionna export.', 'E4F4E9', C.accent5, 'Offline');
-  card(s, sx, 2.75, sw, 1.65, 'Online', 'Keyframe search → SAM 3 → object cloud → object cache → target with its age. Room cameras are RGB only: depth from the map.', 'FFF7E0', '8A6A00', 'Online');
-  card(s, sx, 4.55, sw, 1.0, 'Background', 'SAM 3D asset per object (≥32 GB GPU).', 'EFEAFB', C.accent4, 'Assets');
-  card(s, sx, 5.7, sw, 1.05, 'Comms bridge (server)', 'GPU scheduler serves pick requests before training and SAM 3D.', 'DDF3F0', C.accent1, 'ServerBridge');
-  s.addNotes('The room cameras are wired to the server, so none of their images use the robot’s Wi-Fi.');
+  addT(s, 'The comms side', { placeholder: 'title' });
+  const wcell = (t, bg, fg) => ({ text: t, options: { bold: true, color: fg, fill: { color: bg } } });
+  const hd = (t) => ({ text: t, options: { bold: true, color: 'FFFFFF', fill: { color: '0B3D3A' } } });
+  const R_ = (t) => wcell(t, 'DFF3E6', '1F6F43'), S_ = (t) => wcell(t, 'ECE6FB', '5B3FB0'), B_ = (t) => wcell(t, 'EEF0F3', '333333');
+  const crow = [
+    [hd('Component'), hd('Where'), hd('What it does')],
+    [{ text: 'offload_client', options: { bold: true } }, R_('Robot'), 'Sends one resized JPEG when a step needs it, with an ID and capture time; waits with a timeout; retries; drops old answers'],
+    [{ text: 'link_monitor', options: { bold: true } }, R_('Robot'), 'Measures round-trip time, signal strength and the server’s queue; predicts how long an answer will take'],
+    [{ text: 'policy', options: { bold: true } }, R_('Robot'), 'Per step: wait, retry, use the onboard model, keep the current goal, or slow down'],
+    [{ text: 'keyframe_packer', options: { bold: true } }, R_('Robot'), 'Sends keyframe packs when the view changes; pauses while detecting and grasping'],
+    [{ text: 'recorder', options: { bold: true } }, R_('Robot'), 'Saves full-rate data and bags to disk; uploads them at the dock'],
+    [{ text: 'offload_server', options: { bold: true } }, S_('Server'), 'Runs the model (SAM 3 / YOLOE) on the photo; answers with the same ID and its own times; drops requests that are too old'],
+    [{ text: 'keyframe_ingest', options: { bold: true } }, S_('Server'), 'Receives keyframe packs, fills gaps after a pause, updates the map and the keyframe search'],
+    [{ text: 'GPU scheduler', options: { bold: true } }, S_('Server'), 'Runs pick requests before map training and SAM 3D'],
+    [{ text: 'logger', options: { bold: true } }, S_('Server'), 'Records times, sizes and link quality per request → where the time goes, and the link map'],
+    [{ text: 'link map', options: { bold: true } }, B_('Both'), 'Signal quality per spot in the room; tells the robot where it can send from'],
+  ];
+  s.addTable(crow, { x: 0.5, y: 1.25, w: 12.33, colW: [2.2, 1.1, 9.03], fontSize: 13, fontFace: FONT, color: '1D1D1F',
+    border: { type: 'solid', pt: 0.75, color: 'C8D6D3' }, fill: { color: 'FFFFFF' }, valign: 'middle',
+    rowH: [0.42, ...Array(10).fill(0.47)], objectName: 'Comms components' });
+  s.addNotes('The comms side is two small sets of ROS 2 nodes, one on each machine, plus the link map. They wrap the one network call in the existing grasp code and manage the background traffic.');
 
   // 8 What crosses the Wi-Fi
-  pres.addSection({ title: 'Link' });
-  s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Link' });
+  s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
   addT(s, 'What crosses the robot’s Wi-Fi', { placeholder: 'title' });
   const hdr = (t) => ({ text: t, options: { bold: true, color: C.background1, fill: { color: C.text2 } } });
   const rows = [
