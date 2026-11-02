@@ -5,7 +5,7 @@
 | Place | Hardware | Runs |
 |---|---|---|
 | Robot | Intel NUC 15 (CPU), Jetson Orin NX (GPU) | control, odometry, Nav2, small models, the decision node |
-| Network | ED305 Wi-Fi AP (5 GHz + 2.4 GHz, dual link) | robot ↔ server; the camera network shares it if wireless |
+| Network | ED305 Wi-Fi AP (one link, 5 GHz) | robot ↔ server; the camera network shares it if wireless |
 | Server | GPU workstation | heavy models; the ED305 camera streams; USD twin |
 
 Sensors: two hemispherical 3-D lidars, IMU, central high-resolution RGB
@@ -31,14 +31,13 @@ too sparse.
 
 ## 3. Comms: what the optimization needs from the link
 
-For any server option o (request form c, link l, sent from position
-x'), the probability that its answer is back before the phase deadline:
+For any server option o (request form c, sent from position x'), the probability that its answer is back before the phase deadline:
 
     p(o) = P[ T_up + T_queue + T_inf + T_down ≤ D_k ]
 
 **Predictor.** Features: request size; link map at x' (per-cell
 goodput and RTT distributions in the USD twin); live RTT, goodput,
-RSSI; AP load (camera network on/off, airtime); server queue; link l.
+RSSI; AP load (camera network on/off, airtime); server queue.
 Models, simplest first: per-cell delay quantiles scaled by size → plus
 live/map goodput correction → quantile regression (gradient boosting).
 Judged by calibration (Brier score) on held-out days; baselines RSSI
@@ -46,14 +45,13 @@ threshold, mean RTT, static map only (Liu et al. 2026).
 
 **Knobs that raise p.** Request form (crop, resolution, JPEG/H.264,
 Draco for points); priority (DSCP → WMM high class); DDS settings for
-large messages (Lee et al. 2025); dual link (send on 5 GHz and 2.4 GHz,
-take the first answer).
+large messages (Lee et al. 2025).
 
 ## 4. The optimization
 
 At each phase k (tolerance ε_k, speed v_k, deadline D_k = ε_k / v_k),
-choose an option o from: onboard; server (c, l, x') for each form, link
-and candidate send point; or a lower speed.
+choose an option o from: onboard; server (c, x') for each form and
+candidate send point; or a lower speed.
 
     maximize over o:   P_succ(o) − λ_b · b(o) − λ_t · Δt(o)
 
@@ -86,7 +84,7 @@ stage machine ─phase─▶ DECISION NODE ◀── profile tables (q)    recei
                         ▼                                       heavy models: open-vocab
             onboard models (always on)     request sender ──▶   detection, segmentation,
             YOLO, lidar-box points,        (form, priority,      grasp, VLM; 2Fast-2Lamaa
-            heuristic grasp, servo,         dual link)           (option)
+            heuristic grasp, servo,         DDS settings)        (option)
             2Fast-2Lamaa                        ◀── answer + stamps
                         │
             answer handler: pick in-time server answer or onboard answer;
@@ -104,11 +102,11 @@ stage machine ─phase─▶ DECISION NODE ◀── profile tables (q)    recei
    effect on the server models' error. Gives q_on, q_srv(c).
 3. **Instrument and probe (p).** chrony; request IDs with timestamps at
    every step; link logger; probe node sending real-size requests to a
-   server echo service, over ED305, camera network on/off, each link;
+   server echo service, over ED305, camera network on/off;
    different days for training and testing.
 4. **Link map and predictor.** Per-cell distributions in the twin; fit
    the predictor; check calibration.
-5. **Knobs.** Form, priority, DDS, dual link; measure their effect on p.
+5. **Knobs.** Form, priority, DDS; measure their effect on p.
 6. **Decision node.** Enumerate options, compute the objective, act;
    answer handler with onboard fallback.
 7. **Evaluate.**

@@ -27,12 +27,10 @@ Three parts:
    Output: P[T ≤ D] for that request.
 2. **Transport knobs that raise P[T ≤ D].** Form of the request (crop,
    resolution, codec), priority class on the AP (WMM / DSCP), DDS
-   settings for large messages, and the dual link (5 GHz + 2.4 GHz,
-   from the earlier dual-link prototype): send a critical request on
-   both and take the first answer.
+   settings for large messages.
 3. **The decision interface.** The robot's offloading choice reads
-   P[T ≤ D] per option (onboard; server with form c, link l, from
-   here or from the next stop point) instead of a fixed rule.
+   P[T ≤ D] per option (onboard; server with form c, from here
+   or from the next stop point) instead of a fixed rule.
 
 ## Why this, from the literature
 
@@ -56,7 +54,7 @@ it, used by the offloading decision.
    ED305 (positions, loads, request sizes). Baselines: RSSI threshold;
    mean RTT; static map only (Liu et al. style).
 2. **Knob gains.** Miss rate with and without form change, priority,
-   DDS tuning, dual link; at the table and at the weak spot; camera
+   DDS tuning; at the table and at the weak spot; camera
    network on and off.
 3. **Task effect.** Picks with the offloading decision driven by each
    predictor: pick success, object error at the moment of action, time

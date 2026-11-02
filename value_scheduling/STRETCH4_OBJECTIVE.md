@@ -18,9 +18,9 @@ not optimization.
 At each phase k (deadline D_k, tolerance ε_k), the robot chooses an
 option o:
 - **onboard:** answer from the robot's model;
-- **server (c, l, x'):** request form c (crop, resolution, codec), link
-  l (5 GHz, 2.4 GHz, or both), sent from position x' (here, or a
-  candidate stop point on the planned path).
+- **server (c, x'):** request form c (crop, resolution, codec), sent
+  from position x' (here, or a candidate stop point on the planned
+  path).
 
 The onboard model always runs anyway (cheap); a server answer that is
 late is replaced by the onboard one.
@@ -58,7 +58,7 @@ requests given p = 0.9, about 90 % come back in time.
 T = uplink + server queue + inference + downlink.
 Features: request size; link map at the send point (per-cell goodput
 and RTT distributions); live RTT, goodput, RSSI; AP load (camera
-network on/off, airtime); server queue; link l.
+network on/off, airtime); server queue.
 Model, in increasing complexity, stopping when calibration is good:
 1. per-cell empirical delay quantiles scaled by size;
 2. 1 corrected by the ratio of live to map goodput;
@@ -82,13 +82,13 @@ Baselines: RSSI threshold; mean RTT; static map only (Liu et al.
   image, crop, lidar box points, lidar scan) to a server echo service
   that waits the measured inference time and replies.
 - Drive ED305 along varied paths; stop at the table and the weak spot.
-- Repeat with the camera network off / on, and on 5 GHz, 2.4 GHz, both.
+- Repeat with the camera network off / on.
 - Every probe logged with the robot's pose in the USD twin frame.
 - Different days for training and testing.
 
 **3. Link map**
-- Per cell of the twin: distributions of goodput and RTT, per link,
-  per load level.
+- Per cell of the twin: distributions of goodput and RTT, per load
+  level.
 
 **4. Predictor**
 - Fit models 1–3; report the Brier score and calibration curves on the
@@ -101,8 +101,6 @@ Baselines: RSSI threshold; mean RTT; static map only (Liu et al.
   or `iptables`/`tc` marking) so the AP puts it in a WMM high class.
 - DDS: fragment size, socket buffers, reliability per Lee et al.
   (2025).
-- Dual link: two interfaces (5 GHz, 2.4 GHz); a critical request is
-  sent on both; the server and robot drop duplicates by request ID.
 - Measure each knob's effect on p at the table and the weak spot.
 
 **6. Decision node**
