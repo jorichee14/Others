@@ -1,125 +1,168 @@
-# Stretch 4 in ED305: from models to communication-aware optimization
+# Communication-aware offloading for coarse-to-fine mobile manipulation (Stretch 4, ED305)
 
-## 1. Hardware and where things can run
+## 1. Problem
 
-| Place | Hardware | Runs |
+A Stretch 4 picks an object in ED305: find it, drive to it, locate it,
+plan the grasp, align, close, verify. Each phase can be answered by a
+small model on the robot (fast, independent of the link, less accurate)
+or a heavy model on the server (accurate, slow, dependent on the Wi-Fi
+at the robot's position). As the task goes from coarse to fine, the
+accuracy needed rises while the time available shrinks. The robot must
+decide, per phase, which model answers, and for the server, what form
+of request to send and from where, so that the answer is accurate
+enough and arrives before it acts.
+
+## 2. System model
+
+**Entities.**
+- Robot: Intel NUC 15 + Jetson Orin NX; two 3-D lidars, IMU, central
+  RGB (gripper workspace), two fisheye RGB; no depth camera (object
+  3-D from lidar points projected into the image).
+- Server: GPU workstation; also receives the ED305 camera streams.
+- Link: one Wi-Fi AP, 5 GHz, shared with the camera network.
+- Workspace W: ED305, in the USD twin frame. Robot position x(t) on
+  planned path π.
+- Transport: ROS 2 (DDS) topics: request topic and answer topic matched
+  by request ID; best effort, keep last 1 for requests and streams.
+
+**Task.** Phases k = 1..K, each with
+- tolerance ε_k (object position ε_k^V; robot pose ε_k^L);
+- deadline D_k: ε_k / v_k while moving at speed v_k; the dwell budget
+  τ_k (how long the robot will wait before acting) while still.
+
+**Models.** For each phase, an onboard model m_k^on and a server model
+m_k^srv, with error e and inference time t_inf. Accuracy:
+q_on,k = P[e_on ≤ ε_k], q_srv,k(c) = P[e_srv(c) ≤ ε_k] for request form
+c (crop, resolution, codec, Draco level), measured offline.
+
+**Request.** Form c with size S(c), sent at position x'. Response time
+
+    T(c, x', t) = S(c) / G_up(x', t) + d_acc(x', t) + Q(t) + t_inf^srv + S_ans / G_down(x', t)
+
+G: goodput at the position and time (depends on distance to AP,
+obstacles, people, and load from other stations); d_acc: channel access
+and retransmission delay; Q: server queue.
+
+**Predictor.** p(c, x') = P̂[T(c, x', t) ≤ D_k | features]; features:
+S(c), link map at x' (per-cell goodput and RTT distributions in the
+twin), live RTT / goodput / RSSI, AP load, server queue.
+
+**Localization.** Odometry on the robot; 2Fast-2Lamaa gives map→odom
+corrections (onboard by default; server as an option). Pose error at
+action e_L = e_loc + ρ · v · A, A = age of the last correction, ρ =
+odometry drift per metre.
+
+**Decision per phase.** a_k ∈ {onboard} ∪ {server(c, x') : c ∈ C_k,
+x' ∈ candidate send points on π before the deadline point} ∪
+{slower speed v' < v_k}. The onboard model always runs; a late server
+answer is replaced by the onboard one.
+
+## 3. Formulation
+
+Per phase k:
+
+    maximize over a:   P_succ(a) − λ_b · b(a) − λ_t · Δt(a)
+
+    P_succ(onboard)       = q_on,k
+    P_succ(server(c, x')) = p(c, x') · q_srv,k(c) + (1 − p(c, x')) · q_on,k
+
+b(a): airtime on the shared AP; Δt(a): time to reach x' or lost by
+slowing (slowing raises D_k). Localization is decided per drive segment
+with q = P[e_L ≤ ε^L].
+
+Over a pick, phases are sequential and each decision depends on its
+own phase and position, so the pick objective is the sum over phases.
+Each decision has tens of options and is solved exactly by
+enumeration.
+
+Predictor objective (calibration): minimize the Brier score
+(1/N) Σ (p_i − 1[T_i ≤ D_i])² on held-out days.
+
+**Metric of the task.** Error of the information the robot acts on, at
+the moment it acts (object error, pose error), against ground truth
+from the ED305 camera network: the age-of-incorrect-information view,
+measured.
+
+## 4. Approach
+
+| Part | Approach | Concretely |
 |---|---|---|
-| Robot | Intel NUC 15 (CPU), Jetson Orin NX (GPU) | control, odometry, Nav2, small models, the decision node |
-| Network | ED305 Wi-Fi AP (one link, 5 GHz) | robot ↔ server; the camera network shares it if wireless |
-| Server | GPU workstation | heavy models; the ED305 camera streams; USD twin |
+| Will it arrive in time? | radio-map-based latency prediction, calibrated | link map of ED305 in the USD twin + live correction → p(c, x') |
+| What to send | content adaptation | crop, resolution, JPEG / H.264; Draco for lidar points |
+| How it is carried | QoS + middleware | DSCP → WMM high class for requests; DDS fragment size, buffers, reliability |
+| Whether to send | expected-success offloading with onboard fallback | enumeration of the options above |
 
-Sensors: two hemispherical 3-D lidars, IMU, central high-resolution RGB
-(gripper workspace), two fisheye RGB; no depth camera, so 3-D object
-geometry comes from lidar points projected into the image.
+Models per phase:
 
-## 2. Models per phase: onboard option vs server option
+| Phase | Onboard | Server |
+|---|---|---|
+| Localization | 2Fast-2Lamaa on the NUC | 2Fast-2Lamaa on the server |
+| Find the goal | closed-vocabulary YOLO (Orin NX) | open-vocabulary detector on the robot image or the room cameras |
+| Drive | Nav2 | — |
+| Arrive, locate | YOLO + lidar points in the box | open-vocabulary segmentation + lidar points |
+| Plan grasp | heuristic grasp from lidar points | learned grasp generator (check: needs dense enough points) |
+| Align, close | box tracking + gripper effort | — |
+| Verify | gripper aperture / effort + image | VLM check |
 
-| Phase | Needs | Onboard option | Server option | Up the link if server |
-|---|---|---|---|---|
-| Localization (all moving phases) | robot pose, ε^L ~ 5–10 cm | 2Fast-2Lamaa on the NUC, on the built map or USD twin point cloud | 2Fast-2Lamaa on the server | lidar keyframes (Draco), IMU |
-| 1 Find the goal | which table / where the object is, from a language query | closed-vocabulary YOLO (TensorRT, Orin NX) | open-vocabulary detector (e.g. Grounding DINO / OWLv2) on the robot image, or on the ED305 camera streams | robot image (or nothing, if the room cameras answer) |
-| 2 Drive | path, obstacles | Nav2 on lidar, local | — | — |
-| 3 Arrive, locate | object box and 3-D position, ε ~ 2–3 cm | YOLO + lidar points in the box → centroid | open-vocabulary segmentation (e.g. Grounded-SAM 2) mask + lidar points | one full image (+ lidar box points) |
-| 4 Plan grasp | grasp pose, ε ~ 1 cm | heuristic grasp from the lidar points (centroid + principal axis, top or side) | learned grasp generator (e.g. AnyGrasp as in OK-Robot, Contact-GraspNet) | crop + object points |
-| 5 Align | gripper on target, mm, tens of ms | box tracking on the central camera + lidar points, local servo | — (deadline too short) | — |
-| 6 Close | contact | gripper effort, local | — | — |
-| 7 Verify | holding or not | gripper aperture/effort + image check | VLM check | one crop |
+## 5. Novelty
 
-Check before relying on the server grasp option: learned grasp
-generators expect dense depth; lidar points on a small object may be
-too sparse.
+**Claimed.**
+1. **The problem.** Per-phase choice between the robot's and the
+   server's model in coarse-to-fine mobile manipulation, where the
+   accuracy needed rises as the deadline shrinks, the deadline comes
+   from tolerance and speed, and the link depends on the robot's
+   position; with the onboard answer as a fallback, so offloading can
+   only add success.
+2. **The predictor.** A calibrated probability that a request of a given
+   size, sent from a given position, returns before its deadline, on a
+   real building's Wi-Fi under real load, built in the digital twin's
+   frame and corrected online.
+3. **The evidence.** Real picks with ground truth, scored by the error
+   of the information at the moment of action.
 
-## 3. Comms: what the optimization needs from the link
+**Against the closest work.**
 
-For any server option o (request form c, sent from position x'), the probability that its answer is back before the phase deadline:
+| Work | What it does | What it leaves |
+|---|---|---|
+| Liu et al. (arXiv 2606.31497, 2026) | communication map → where to send the next cloud request | map known in advance; no onboard alternative; one request type; simulation; authors list load, people and deployed Wi-Fi as open |
+| Chinchali et al. (RSS 2019) | offload when the local model is uncertain | no phases, no position, no deadline from motion |
+| Pohland et al. (MSR-TR-2026-14) | measure onboard / edge / cloud for mobile manipulation | no per-phase decision |
+| AWStream, Chameleon, DDS | adapt the form of a video stream to bandwidth | no robot, no onboard alternative |
+| SPO, TIC-VLA, latency-tolerant VLA | hide delay inside the policy by training | policy changed; here the models are unchanged |
+| FogROS2-PLR | minimise deadline-miss probability across network routes | no position, no task phase |
 
-    p(o) = P[ T_up + T_queue + T_inf + T_down ≤ D_k ]
+**Not claimed.** Compression, QoS marking, DDS tuning, slowing down:
+used, not new.
 
-**Predictor.** Features: request size; link map at x' (per-cell
-goodput and RTT distributions in the USD twin); live RTT, goodput,
-RSSI; AP load (camera network on/off, airtime); server queue.
-Models, simplest first: per-cell delay quantiles scaled by size → plus
-live/map goodput correction → quantile regression (gradient boosting).
-Judged by calibration (Brier score) on held-out days; baselines RSSI
-threshold, mean RTT, static map only (Liu et al. 2026).
+## 6. Execution
 
-**Knobs that raise p.** Request form (crop, resolution, JPEG/H.264,
-Draco for points); priority (DSCP → WMM high class); DDS settings for
-large messages (Lee et al. 2025).
-
-## 4. The optimization
-
-At each phase k (tolerance ε_k, speed v_k, deadline D_k = ε_k / v_k),
-choose an option o from: onboard; server (c, x') for each form and
-candidate send point; or a lower speed.
-
-    maximize over o:   P_succ(o) − λ_b · b(o) − λ_t · Δt(o)
-
-    P_succ(onboard)  = q_on
-    P_succ(server o) = p(o) · q_srv(c) + (1 − p(o)) · q_on
-
-- q_on, q_srv(c): probability the answer is within ε_k, profiled
-  offline per phase.
-- p(o): from the comms predictor.
-- b(o): airtime on the shared AP; Δt(o): time to reach x' or lost by
-  slowing.
-- The onboard model always runs; a late server answer is replaced by
-  the onboard one.
-
-**Localization** is decided per drive segment with the same form:
-q = P[pose error ≤ ε^L], pose error = e_loc + ρ · v · age of the last
-correction, where age depends on p for the server option.
-
-**Solved by enumeration** (tens of options per decision); exact, no
-solver, no training of the decision.
-
-## 5. Software architecture
-
-```
-ROBOT                                                          SERVER
-stage machine ─phase─▶ DECISION NODE ◀── profile tables (q)    receiver: deadline queue,
-                        │   ▲                                  drop stale, report queue
-                        │   └── PREDICTOR (p) ◀── link logger,          │
-                        │        link map, AP load, server queue        ▼
-                        ▼                                       heavy models: open-vocab
-            onboard models (always on)     request sender ──▶   detection, segmentation,
-            YOLO, lidar-box points,        (form, priority,      grasp, VLM; 2Fast-2Lamaa
-            heuristic grasp, servo,         DDS settings)        (option)
-            2Fast-2Lamaa                        ◀── answer + stamps
-                        │
-            answer handler: pick in-time server answer or onboard answer;
-            answers in the map frame (pose at capture)
-```
-
-## 6. Execution, in order
-
-1. **Bring up both sides.** Onboard: YOLO (TensorRT), lidar–camera
-   projection, heuristic grasp, 2Fast-2Lamaa. Server: open-vocabulary
-   detector, segmentation, grasp generator. Same input/output messages
-   for both (box / mask / grasp + capture stamp).
-2. **Profile accuracy (q).** On the rosbag and ground truth from the
-   camera network: each model's error per phase; each request form's
-   effect on the server models' error. Gives q_on, q_srv(c).
-3. **Instrument and probe (p).** chrony; request IDs with timestamps at
-   every step; link logger; probe node sending real-size requests to a
-   server echo service, over ED305, camera network on/off;
-   different days for training and testing.
-4. **Link map and predictor.** Per-cell distributions in the twin; fit
-   the predictor; check calibration.
-5. **Knobs.** Form, priority, DDS; measure their effect on p.
-6. **Decision node.** Enumerate options, compute the objective, act;
-   answer handler with onboard fallback.
-7. **Evaluate.**
+1. **Both sides up.** Onboard and server models with the same message
+   interface (box / mask / grasp + request ID and capture stamp).
+2. **Accuracy profiles (q).** Each model and request form, per phase, on
+   the rosbag, against camera-network ground truth.
+3. **Instrumentation.** chrony; timestamps at every hop; link logger
+   (`iw station dump`, RTT, goodput); AP load.
+4. **Probe campaign (p).** Real-size requests to a server echo service,
+   across ED305, camera network on and off, several days.
+5. **Link map and predictor.** Per-cell distributions in the twin;
+   models from per-cell quantiles to quantile regression; calibration
+   on held-out days.
+6. **Transport settings.** Form, DSCP, DDS; effect on p at the table and
+   the weak spot.
+7. **Decision node.** Enumerates options, picks the best, onboard
+   fallback in the answer handler.
+8. **Evaluation.**
 
 ## 7. Evaluation
 
 | Method | Description |
 |---|---|
 | Always onboard | robot models only |
-| Always server (today) | every phase to the server, raw images |
+| Always server (today) | raw images to the server every phase |
 | Always server, compressed | fixed form, no decision |
-| Static-map placement | send point from a fixed map, fixed form (Liu et al. 2026 style) |
-| Ours | per-phase onboard/server choice with the calibrated predictor and knobs |
+| Static-map placement | send point from a fixed map, fixed form (Liu et al. style) |
+| Decision with simple predictors | RSSI threshold; mean RTT |
+| Ours | calibrated predictor + per-phase decision + transport settings |
 
 Conditions: good link; weak spot at the table; camera network loaded.
 Metrics: pick success; object and pose error at the moment of each
@@ -131,13 +174,13 @@ calibration.
 1. Onboard models within tolerance in every phase → no offloading
    problem for this task.
 2. Server models not clearly better where it matters → same.
-3. Server answers never late in ED305, even loaded → the predictor has
-   nothing to predict; create the weak spot or load, or go multi-robot.
+3. Server answers never late in ED305, even loaded → nothing to
+   predict; create the weak spot or load, or go multi-robot.
 
 ## 9. Roles
 
 | Who | Part |
 |---|---|
-| 廖恩莆 | pipeline, stage machine, onboard and server models (steps 1–2) |
-| Prof. Yeh | compute placement, server and AMD PC |
-| Jorich | comms: instrumentation, probes, link map, predictor, knobs, decision node, evaluation (steps 3–7) |
+| 廖恩莆 | pipeline, stage machine, onboard and server models (1–2) |
+| Prof. Yeh | compute placement, server, AMD PC |
+| Jorich | instrumentation, probes, link map, predictor, transport, decision node, evaluation (3–8) |
