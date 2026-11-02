@@ -24,7 +24,7 @@ fisheye RGB, joint encoders, gripper                                 - correctio
         │                    ▼
 STAGE MACHINE ──phase──▶ ANSWER HANDLER                              DIGITAL TWIN (server)
 (find, drive, arrive,    - pose = odometry ⊕ latest correction       - USD twin + built map
- plan, align, close,     - box → 3-D with local depth and the        - link map of ED305
+ plan, align, close,     - box → 3-D with lidar points in box,       - link map of ED305
  verify)                   pose at capture                           - ground truth from the camera
         │                - discard answers past their phase            network (evaluation)
         ▼
