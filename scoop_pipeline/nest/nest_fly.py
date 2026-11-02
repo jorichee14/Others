@@ -149,7 +149,10 @@ def main():
     parser.add_argument("--width", type=int, default=1280, help="frame width when --size is not given")
     parser.add_argument("--fov", type=float, default=0.0, help="vertical field of view (deg; default: the training camera's)")
     parser.add_argument("--unseen-level", type=int, default=3,
-                        help="texture levels for surfels no training camera saw (24: all, as for seen ones)")
+                        help="texture levels for surfels no training camera saw (24: all, as for seen ones; "
+                             "-1: leave them out altogether)")
+    parser.add_argument("--write-unseen", default="", metavar="PLY",
+                        help="write the unseen surfels' positions to this .ply, to look at where they are")
     parser.add_argument("--min-views", type=int, default=3, help="training cameras that must see a surfel to count it seen")
     parser.add_argument("--start", type=int, default=0, help="first frame of the path to render")
     parser.add_argument("--count", type=int, default=0, help="frames to render (0: to the end)")
@@ -199,9 +202,21 @@ def main():
     if args.unseen_level < 24:
         seen = seen_counts(gaussians.get_xyz.detach(), train, dataset.source_path, torch)
         unseen = seen < args.min_views
-        gaussians._appearance_level.data[unseen] = float(args.unseen_level)
+        if args.unseen_level < 0:
+            gaussians._opacity.data[unseen] = -30.0          # sigmoid(-30): transparent
+            how = "left out"
+        else:
+            gaussians._appearance_level.data[unseen] = float(args.unseen_level)
+            how = f"drawn with {args.unseen_level} texture levels"
         print(f"surfels seen by fewer than {args.min_views} training cameras: {int(unseen.sum())} of {len(seen)} "
-              f"({100.0 * unseen.float().mean().item():.1f}%), drawn with {args.unseen_level} texture levels", flush=True)
+              f"({100.0 * unseen.float().mean().item():.1f}%), {how}", flush=True)
+        if args.write_unseen:
+            P = gaussians.get_xyz.detach()[unseen].cpu().numpy().astype(np.float32)
+            with open(os.path.expanduser(args.write_unseen), "wb") as fh:
+                fh.write(f"ply\nformat binary_little_endian 1.0\nelement vertex {len(P)}\n"
+                         "property float x\nproperty float y\nproperty float z\nend_header\n".encode())
+                fh.write(P.tobytes())
+            print(f"wrote {args.write_unseen}: {len(P)} unseen surfels", flush=True)
     up = np.array([0.0, 0.0, 1.0])
     out = os.path.expanduser(args.fly[1])
     write, release = video_writer(out, fps, (W, H))

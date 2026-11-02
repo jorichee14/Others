@@ -276,7 +276,7 @@ def main():
                          "--scene is then optional (its images.txt gives the speed test)")
     ap.add_argument("--only", default="", help="score only views whose name starts with this (c2_ for one session)")
     ap.add_argument("--exclude", default=None, help="leave out views whose name starts with this")
-    ap.add_argument("--out", default=None, help="default <renders>/psnr.csv")
+    ap.add_argument("--out", default=None, help="default psnr.csv beside the renders folder (never inside it: metrics.py reads every file there as an image)")
     a = ap.parse_args()
     renders = os.path.expanduser(a.renders)
     scene = os.path.expanduser(a.scene) if a.scene else None
@@ -288,7 +288,7 @@ def main():
     if not rows:
         sys.exit("no view matched (names against <scene>/images, or none starts with --only; "
                  "ls the renders dir to see the prefixes)")
-    out = a.out or os.path.join(renders, "psnr.csv")
+    out = a.out or os.path.join(os.path.dirname(os.path.normpath(renders)), "psnr.csv")
     with open(out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=["frame", "name", "camera", "psnr",
                                            "psnr_gain", "gain", "dx", "dy", "shift",
