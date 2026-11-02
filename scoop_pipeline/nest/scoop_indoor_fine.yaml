@@ -33,6 +33,7 @@ training_cfg:
   session_color: true                   # one learned colour response per camera id (nest_session_color.patch)
   image_color: true                     # and one per training image: exposure flicker stays out of the texture
   blur_match: true                      # a smeared frame's render is blurred to its level before the loss (nest_blur_loss.patch; needs <scene>/blur_sigma.csv)
+  alpha_all: true                       # opacity target 1 on every pixel: a pure black pixel is dark, not empty (nest_alpha_all.patch)
   position_lr_max_steps: 140_000
   densification_interval: 100
   ingp_densification_interval: 100

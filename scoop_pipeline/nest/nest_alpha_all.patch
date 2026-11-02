@@ -1,0 +1,15 @@
+diff --git a/train.py b/train.py
+index d6ca9ff..451b30e 100644
+--- a/train.py
++++ b/train.py
+@@ -171,6 +171,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
+             gt_alpha = viewpoint_cam.gt_alpha_mask.cuda().float()
+         else:
+             gt_alpha = (gt_image != 0).any(dim=0, keepdim=True).float()
++        if getattr(cfg_model.training_cfg, 'alpha_all', False):
++            # indoors every pixel sees a surface; a pure black pixel (a dark panel, deep shadow)
++            # is dark, not empty, and must not teach the model to be transparent there
++            gt_alpha = torch.ones_like(gt_image[:1])
+         
+         try:
+             if cfg_model.settings.gs_alpha and ingp is not None:

@@ -27,6 +27,7 @@ git apply ~/workspaces/Others/scoop_pipeline/nest/nest_lidar.patch
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_session_color.patch   # on top: one colour response per camera id
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_blur_loss.patch       # on top of that: blur-matched loss
 git apply ~/workspaces/Others/scoop_pipeline/nest/nest_load_levels.patch     # a loaded model renders every texture level
+git apply ~/workspaces/Others/scoop_pipeline/nest/nest_alpha_all.patch       # opacity target 1 everywhere (training_cfg.alpha_all)
 git submodule update --init --recursive
 conda env create -f environment.yml        # the conda half succeeds; the pip half fails -- expected
 conda activate nest_splatting
