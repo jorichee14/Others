@@ -13,6 +13,20 @@ bag ──extract──► rgb.png, depth.npy, pointmap.npy, K ──segment (SA
 The stages exchange files only: SAM3 (Python 3.12, recent torch) and SAM 3D Objects
 (torch 2.5.1, pytorch3d, kaolin, ≥32 GB VRAM) do not share an environment.
 
+**Two reconstruction backends:**
+
+| subcommand | model | GPU | how it becomes metric |
+|---|---|---|---|
+| `reconstruct` | SAM 3D Objects | ≥32 GB | the depth pointmap is a model input; pose comes out of the model |
+| `reconstruct-idol` | [Idol](https://github.com/speridlabs/idol-sdk) | ~7.2 GB (fits an RTX 3080 12 GB) | object comes out in a unit cube; scale + pose fitted to the depth in the mask (CPU, ~40 s) |
+
+`reconstruct-idol` fit: ICP at fixed scale on the visible part in both directions (measured →
+object, and object points visible from the camera → measured), started from 24 yaws × 3 scales
+about the camera's vertical axis. The scale is then searched by golden section. Each candidate
+is scored by distance to the measured points plus the fraction of object points that contradict
+the image (outside the mask, or in front of a measured surface). It assumes a roughly level camera
+(the generated object is upright).
+
 ## Setup (once)
 
 ```bash
@@ -30,7 +44,13 @@ hf auth login
 ```
 
 ```bash
-# SAM 3D Objects: request access at https://huggingface.co/facebook/sam-3d-objects, then follow
+# Idol (12 GB GPUs): request access to the gated DINOv3 and FLUX.2-dev repos on Hugging Face, then
+git clone https://github.com/speridlabs/idol-sdk.git ~/workspaces/idol-sdk
+pip install -e ~/workspaces/idol-sdk plyfile scipy   # in the sam3 env (torch >= 2.5)
+```
+
+```bash
+# SAM 3D Objects (>= 32 GB GPUs): request access at https://huggingface.co/facebook/sam-3d-objects, then follow
 # its doc/setup.md (mamba env sam3d-objects + checkpoints/hf). Also:
 git clone https://github.com/facebookresearch/sam-3d-objects.git ~/workspaces/sam-3d-objects
 pip install plyfile scipy   # inside the sam3d-objects env
@@ -74,7 +94,14 @@ conda activate sam3d-objects
 python bag_to_objects.py reconstruct --out $OUT --sam3d-repo ~/workspaces/sam-3d-objects --only robot
 ```
 
-It prints, per object, the number of Gaussians, the extent in metres, and the median
+On the RTX 3080 (12 GB), use Idol instead. Stop other GPU jobs first: Idol needs ~7.2 GB.
+
+```bash
+conda activate sam3
+python bag_to_objects.py reconstruct-idol --out $OUT --only robot
+```
+
+Either backend prints, per object, the number of Gaussians, the extent in metres, and the median
 distance from the measured depth points inside the mask to the nearest Gaussian (the
 visible-side error). Open `objects/<name>_cam.ply` in any 3DGS viewer (SuperSplat,
 `gsplat` viewer), together with `pointmap.npy` if you want to check the fit.
@@ -89,7 +116,8 @@ visible-side error). Open `objects/<name>_cam.ply` in any 3DGS viewer (SuperSpla
 | `meta.json` | stamp, `frame_id`, K, topics, image-depth time offset, detected objects |
 | `masks/<name>.png`, `overlay.png` | SAM3 masks and a preview |
 | `objects/<name>_cam.ply` | object in the camera optical frame, metres |
-| `objects/<name>_local.ply` | object in SAM 3D Objects' normalized frame |
+| `objects/<name>_local.ply` | object in the model's normalized frame |
+| `objects/<name>_input.png` | (Idol) the crop the model saw |
 | `objects/<name>_pose.json` | centre, extent, scale, visible-side error, raw model pose |
 
 ## Notes

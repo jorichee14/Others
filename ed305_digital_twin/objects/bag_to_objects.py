@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Complete, metric object Gaussians from a ROS 2 bag: SAM3 mask + depth pointmap -> SAM 3D Objects.
 
-Four stages, each a subcommand. They exchange files only, because SAM3 and SAM 3D Objects need
+Four stages, each a subcommand (two backends for the last). They exchange files only, because SAM3 and SAM 3D Objects need
 different Python environments (see objects/README.md):
 
   topics       list the bag's topics, types and counts                         (any env with rosbags)
   extract      RGB + registered depth + camera_info -> frame dirs with pointmap (any env with rosbags)
   segment      SAM3 text prompts -> one mask per object instance               (sam3 env)
-  reconstruct  SAM 3D Objects with the metric pointmap -> .ply per object      (sam3d-objects env)
+  reconstruct  SAM 3D Objects with the metric pointmap -> .ply per object      (sam3d-objects env, >= 32 GB)
+  reconstruct-idol  Idol + scale/pose fitted to the depth -> .ply per object   (sam3 env + idol-sdk, ~7.2 GB)
 
 Frame directory written by `extract` and filled by the later stages:
 
@@ -338,6 +339,232 @@ def cmd_reconstruct(a):
             torch.cuda.empty_cache()
 
 
+# ----------------------------------------------------------------------------- Idol backend (12 GB GPUs)
+
+def quat_mul(a, b):
+    """Hamilton product, (w, x, y, z) along the last axis."""
+    aw, ax, ay, az = np.moveaxis(a, -1, 0)
+    bw, bx, by, bz = np.moveaxis(b, -1, 0)
+    return np.stack([aw * bw - ax * bx - ay * by - az * bz,
+                     aw * bx + ax * bw + ay * bz - az * by,
+                     aw * by - ax * bz + ay * bw + az * bx,
+                     aw * bz + ax * by - ay * bx + az * bw], axis=-1)
+
+
+def apply_similarity_ply(path_in, path_out, s, R, t):
+    """Gaussian PLY: p -> s R p + t; log-scales + log s; rotations R * q."""
+    from plyfile import PlyData
+    from scipy.spatial.transform import Rotation
+    ply = PlyData.read(str(path_in))
+    v = ply['vertex'].data
+    xyz = s * np.stack([v['x'], v['y'], v['z']], axis=1) @ R.T + t
+    v['x'], v['y'], v['z'] = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+    for i in range(3):
+        v[f'scale_{i}'] += np.float32(np.log(s))
+    qr = Rotation.from_matrix(R).as_quat()[[3, 0, 1, 2]]
+    q = quat_mul(qr[None], np.stack([v[f'rot_{i}'] for i in range(4)], axis=1).astype(np.float64))
+    for i in range(4):
+        v[f'rot_{i}'] = q[:, i]
+    ply.write(str(path_out))
+    return xyz
+
+
+def umeyama(src, dst, fixed_scale=None):
+    """s, R, t minimising |dst - (s R src + t)|^2 (s held at fixed_scale if given)."""
+    ms, md = src.mean(0), dst.mean(0)
+    xs, xd = src - ms, dst - md
+    U, D, Vt = np.linalg.svd(xd.T @ xs / len(src))
+    S = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        S[2, 2] = -1
+    R = U @ S @ Vt
+    s = fixed_scale if fixed_scale else np.trace(np.diag(D) @ S) / ((xs ** 2).sum() / len(src))
+    return s, R, md - s * R @ ms
+
+
+def fit_to_depth(model, seen, K, mask, depth, n_yaw=24, n_fine=5, scale_factors=(0.75, 1.0, 1.33), iters=40, trim=0.8,
+                 seed=0):
+    """Similarity (s, R, t) putting the generated object `model` (N x 3, y down, any scale) onto the measured
+    points `seen` (M x 3, camera optical frame, metres) of its visible side.
+
+    ICP on the visible part only (measured -> model, and model points visible from the camera -> measured),
+    started from n_yaw yaws about the camera's vertical axis (the generated object is upright, y down, like a
+    level camera) times a few scales. Each result is scored by its distance to the measured points plus the
+    fraction of model points that would contradict the image: projected outside the (dilated) mask, or in front
+    of a measured surface."""
+    import cv2
+    from scipy.spatial import cKDTree
+    rng = np.random.default_rng(seed)
+    if len(model) > 15000:
+        model = model[rng.choice(len(model), 15000, replace=False)]
+    if len(seen) > 5000:
+        seen = seen[rng.choice(len(seen), 5000, replace=False)]
+    tree = cKDTree(model)
+    h, w = mask.shape
+    near_mask = cv2.dilate(mask.astype(np.uint8), np.ones((15, 15), np.uint8)) > 0
+
+    def extent(p, axis):
+        return np.percentile(p[:, axis], 98) - np.percentile(p[:, axis], 2)
+
+    def mid(p):
+        return 0.5 * (np.percentile(p, 98, axis=0) + np.percentile(p, 2, axis=0))
+
+    # start: scale from the vertical extent (the camera usually sees the object's full height); centre at the
+    # middle of the visible points' box in x and y, half the object's horizontal size behind its front surface
+    s0 = extent(seen, 1) / max(extent(model, 1), 1e-6)
+    half_depth = 0.25 * (extent(model, 0) + extent(model, 2))
+    centre0 = mid(seen)
+    centre0[2] = np.percentile(seen[:, 2], 5)
+    size0 = np.linalg.norm(model.max(0) - model.min(0))
+
+    def evaluate(s, R, t):
+        d, _ = tree.query((seen - t) @ R / s)
+        dist_m = d * s
+        pc = s * model @ R.T + t
+        z = pc[:, 2]
+        front = z > 0.05
+        u = np.round(K[0, 0] * pc[front, 0] / z[front] + K[0, 2]).astype(int)
+        v = np.round(K[1, 1] * pc[front, 1] / z[front] + K[1, 2]).astype(int)
+        inside = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+        bad = np.ones(len(u), bool)  # projecting outside the image counts as a contradiction
+        ui, vi, zi = u[inside], v[inside], z[front][inside]
+        meas = depth[vi, ui]
+        occluding = np.isfinite(meas) & (zi < meas - (0.03 + 0.02 * meas)) & mask[vi, ui]
+        bad[inside] = ~near_mask[vi, ui] | occluding
+        violation = (bad.sum() + (~front).sum()) / len(pc)
+        score = np.median(dist_m) / (s * size0) + violation
+        return {'score': float(score), 's': float(s), 'R': R, 't': t,
+                'median_m': float(np.median(dist_m)), 'p90_m': float(np.percentile(dist_m, 90)),
+                'violation_fraction': float(violation)}
+
+    seen_tree = cKDTree(seen)
+    cell = max(2, int(round(max(h, w) / 160)))  # z-buffer grid for the model's visible points
+
+    def visible(pc):
+        z = pc[:, 2]
+        ok = z > 0.05
+        u = (K[0, 0] * pc[:, 0] / np.where(ok, z, 1) + K[0, 2]) // cell
+        v = (K[1, 1] * pc[:, 1] / np.where(ok, z, 1) + K[1, 2]) // cell
+        ok &= (u >= 0) & (u < w // cell + 1) & (v >= 0) & (v < h // cell + 1)
+        idx = np.nonzero(ok)[0]
+        key = (v[idx] * (w // cell + 2) + u[idx]).astype(np.int64)
+        order = np.lexsort((z[idx], key))  # per cell, nearest first
+        key, idx = key[order], idx[order]
+        first = np.ones(len(key), bool)
+        first[1:] = key[1:] != key[:-1]
+        return idx[first]
+
+    def icp(s, R, t, n):
+        # rigid at a fixed scale, both directions on the visible part: measured -> model, and model points
+        # visible from the camera -> measured. The scale is searched outside (golden section on the score): a
+        # free-scale Umeyama step is biased small whenever correspondences are imperfect.
+        for _ in range(n):
+            d1, i1 = tree.query((seen - t) @ R / s)
+            k1 = d1 <= np.quantile(d1, trim)
+            vis = visible(s * model @ R.T + t)
+            d2, i2 = seen_tree.query(s * model[vis] @ R.T + t)
+            k2 = d2 <= np.quantile(d2, trim)
+            src_pts = np.concatenate([model[i1[k1]], model[vis[k2]]])
+            dst_pts = np.concatenate([seen[k1], seen[i2[k2]]])
+            _, R, t = umeyama(src_pts, dst_pts, fixed_scale=s)
+        return s, R, t
+
+    def at_scale(r, s, n):
+        """Re-run ICP from result r at scale s, keeping the object's centre where r put it."""
+        centre = r['s'] * r['R'] @ model.mean(0) + r['t']
+        return evaluate(*icp(s, r['R'], centre - s * r['R'] @ model.mean(0), n))
+
+    # coarse: every (yaw, scale) start, short ICP
+    coarse = []
+    for yaw in np.linspace(0, 2 * np.pi, n_yaw, endpoint=False):
+        c, sn = np.cos(yaw), np.sin(yaw)
+        R = np.array([[c, 0, sn], [0, 1, 0], [-sn, 0, c]])
+        for f in scale_factors:
+            s = s0 * f
+            centre = centre0 + np.array([0.0, 0.0, s * half_depth])
+            t = centre - s * R @ mid(model)
+            r = evaluate(*icp(s, R, t, iters // 2))
+            r['yaw0_deg'] = float(np.degrees(yaw))
+            coarse.append(r)
+    coarse.sort(key=lambda r: r['score'])
+
+    # fine: the n_fine best, golden-section search on the scale (score after ICP at that scale)
+    best = None
+    g = (np.sqrt(5) - 1) / 2
+    for c in coarse[:n_fine]:
+        lo, hi = np.log(c['s'] * 0.7), np.log(c['s'] * 1.4)
+        x1, x2 = hi - g * (hi - lo), lo + g * (hi - lo)
+        r1, r2 = at_scale(c, np.exp(x1), iters // 2), at_scale(c, np.exp(x2), iters // 2)
+        for _ in range(8):
+            if r1['score'] < r2['score']:
+                hi, x2, r2 = x2, x1, r1
+                x1 = hi - g * (hi - lo)
+                r1 = at_scale(c, np.exp(x1), iters // 2)
+            else:
+                lo, x1, r1 = x1, x2, r2
+                x2 = lo + g * (hi - lo)
+                r2 = at_scale(c, np.exp(x2), iters // 2)
+        r = min((r1, r2, c), key=lambda r: r['score'])
+        r = at_scale(r, r['s'], iters)
+        r['yaw0_deg'] = c['yaw0_deg']
+        if best is None or r['score'] < best['score']:
+            best = r
+    fit_to_depth.evaluate, fit_to_depth.icp = evaluate, icp  # for tests
+    return best
+
+
+def cmd_reconstruct_idol(a):
+    from PIL import Image
+    from plyfile import PlyData
+    from idol import IdolPipeline
+
+    pipe = IdolPipeline.from_pretrained(a.weights, optimize=not a.no_optimize)
+    only = set(a.only.split(',')) if a.only else None
+    for d in frame_dirs(a.out):
+        meta = json.loads((d / 'meta.json').read_text())
+        if not meta.get('objects'):
+            print(f'{d.name}: no objects, run segment first')
+            continue
+        rgb = np.array(Image.open(d / 'rgb.png').convert('RGB'))
+        pm = np.load(d / 'pointmap.npy')
+        depth = np.load(d / 'depth.npy')
+        K = np.array(meta['K'])
+        (d / 'objects').mkdir(exist_ok=True)
+        for obj in meta['objects']:
+            if only and obj['name'] not in only and obj['prompt'] not in only:
+                continue
+            mask = np.array(Image.open(d / 'masks' / f'{obj["name"]}.png')) > 127
+            rgba = Image.fromarray(np.dstack([rgb, mask.astype(np.uint8) * 255]), 'RGBA')  # SAM3 mask, no BiRefNet
+            out = pipe(rgba, mode='real', seed=a.seed, steps=a.steps, num_gaussians=a.num_gaussians)
+            base = d / 'objects' / obj['name']
+            out.gaussian.save_ply(f'{base}_local.ply')
+            out.preprocessed_image.save(f'{base}_input.png')
+
+            v = PlyData.read(f'{base}_local.ply')['vertex'].data
+            opaque = 1 / (1 + np.exp(-v['opacity'])) > 0.1
+            model = np.stack([v['x'], v['y'], v['z']], axis=1)[opaque].astype(np.float64)
+            seen = pm[mask]
+            seen = seen[np.isfinite(seen).all(axis=1)].astype(np.float64)
+            if len(seen) < 100:
+                print(f'{d.name}/{obj["name"]}: too little depth in the mask ({len(seen)} points), kept _local.ply only')
+                continue
+            fit = fit_to_depth(model, seen, K, mask, depth)
+            xyz = apply_similarity_ply(f'{base}_local.ply', f'{base}_cam.ply', fit['s'], fit['R'], fit['t'])
+            pose = {
+                'frame': 'camera optical frame of meta.json frame_id (x right, y down, z forward), metres',
+                'frame_id': meta['frame_id'], 'stamp': meta['stamp'], 'backend': 'idol',
+                'center_m': xyz.mean(axis=0).tolist(),
+                'aabb_extent_m': (xyz.max(axis=0) - xyz.min(axis=0)).tolist(),
+                'scale': fit['s'], 'R': fit['R'].tolist(), 't': fit['t'].tolist(),
+                'visible_side_to_gaussians': {'median_m': fit['median_m'], 'p90_m': fit['p90_m']},
+                'violation_fraction': fit['violation_fraction'], 'idol_camera': out.camera,
+            }
+            Path(f'{base}_pose.json').write_text(json.dumps(pose, indent=2))
+            ext = ' x '.join(f'{e:.2f}' for e in pose['aabb_extent_m'])
+            print(f'{d.name}/{obj["name"]}: {xyz.shape[0]} Gaussians, extent {ext} m, visible-side median '
+                  f'{fit["median_m"] * 100:.1f} cm, contradicting {fit["violation_fraction"]:.0%}')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
@@ -375,6 +602,16 @@ def main():
     s.add_argument('--only', help='comma separated object names or prompts')
     s.add_argument('--seed', type=int, default=42)
     s.set_defaults(func=cmd_reconstruct)
+
+    s = sub.add_parser('reconstruct-idol', help='Idol (fits 12 GB) + scaled ICP to depth -> .ply per object')
+    s.add_argument('--out', required=True)
+    s.add_argument('--weights', default='speridlabs/idol', help='Hugging Face repo or local folder')
+    s.add_argument('--only', help='comma separated object names or prompts')
+    s.add_argument('--seed', type=int, default=42)
+    s.add_argument('--steps', type=int, default=50)
+    s.add_argument('--num-gaussians', type=int, default=262144)
+    s.add_argument('--no-optimize', action='store_true', help='no torch.compile (faster first run, slower sampling)')
+    s.set_defaults(func=cmd_reconstruct_idol)
 
     a = p.parse_args()
     a.func(a)
