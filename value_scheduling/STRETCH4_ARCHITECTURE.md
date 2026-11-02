@@ -55,13 +55,25 @@ object) and a speed v_k; together they give a deadline D_k = ε / v_k.
 
 **4. Let the phase decide which flow gets the link.**
 
-| Phase | Base | Lidar (localization) | Images (YOLO) |
-|---|---|---|---|
-| Find, drive | moving | keyframes, priority | low-rate video / off |
-| Arrive | stopping | one high-quality scan, then pause | one full image |
-| Plan grasp | still | paused | one crop |
-| Align, close | still | paused | nothing (local) |
-| Verify, leave | still → moving | resumes | one crop |
+The lidar has two jobs: the robot's pose (2Fast-2Lamaa, server) and
+the object's 3-D position (lidar points inside the YOLO box, since the
+Stretch 4 has no depth camera listed). The second job continues in the
+fine phases, but it needs only the points inside the box, not the
+scan, and can be done on the robot.
+
+| Phase | Base | Lidar for robot pose (up) | Lidar for object position | Images (YOLO) |
+|---|---|---|---|---|
+| Find, drive | moving | keyframes, priority | — | low-rate video / off |
+| Arrive | stopping | one high-quality scan, then pause | box points, first estimate | one full image |
+| Plan grasp | still | paused | box points (on the robot, or to the server if it plans the grasp) | one crop |
+| Align, close | still | paused | box points on the robot, every scan | nothing |
+| Verify, leave | still → moving | resumes | box points once | one crop |
+
+Box points: lidar points that project into the YOLO box (camera–lidar
+extrinsics), a few hundred to a few thousand points; tens of KB with
+Draco if they must cross the link. Check that the lidar's range noise
+and point spacing at 0.3–0.8 m are finer than the grasp tolerance; if
+not, the final centimetres come from the camera or the gripper.
 
 **5. Decide each request by lookup, in this order.**
 1. Phase → tolerances, speed, deadline.
