@@ -4,85 +4,104 @@
 body { font-family:'Inter','DejaVu Sans',sans-serif; color:#1d1d1f; background:#fff;
         width:max-content; padding:28px 30px 30px }
 h1 { font-size:46px; font-weight:800 }
-.sub { font-size:21px; color:#555; margin:6px 0 16px }
-.task { font-size:25px; font-weight:800; margin-bottom:20px }
-.task u { color:#111 }
+.sub { font-size:21px; color:#555; margin:6px 0 14px }
+.task { font-size:25px; font-weight:800; margin-bottom:12px }
+.legend { font-size:17px; color:#444; margin-bottom:18px }
 .flow { display:flex; align-items:stretch }
 .panel { border-radius:18px; padding:14px 16px 16px }
 .pt { font-size:24px; font-weight:800; margin:0 0 12px 4px }
 .row { display:flex; gap:18px }
 .arr { align-self:center; font-size:30px; color:#555; padding:0 8px }
 .card { width:300px; background:#fff; border:2px solid #d6d6d6; border-radius:14px;
-         padding:12px; display:flex; flex-direction:column; gap:7px; min-height:690px }
-.pic { width:274px; height:204px; object-fit:cover; border-radius:8px }
+         padding:12px; display:flex; flex-direction:column; gap:8px; min-height:700px }
+.pic { width:274px; height:190px; object-fit:cover; border-radius:8px }
 .pics3 { display:flex; gap:4px }
-.pics3 img { width:89px; height:204px; object-fit:cover; border-radius:6px }
-.ph { width:274px; height:204px; border:2px dashed #aaa; border-radius:8px; display:flex;
+.pics3 img { width:89px; height:190px; object-fit:cover; border-radius:6px }
+.ph { width:274px; height:190px; border:2px dashed #aaa; border-radius:8px; display:flex;
        align-items:center; justify-content:center; text-align:center; color:#777; font-size:16px;
        flex-direction:column; background:#fafafa }
 .ph span { font-size:13px; color:#999 }
-.t { font-size:23px; font-weight:800; margin-top:4px }
+.t { font-size:23px; font-weight:800; margin-top:2px }
 .n { display:inline-block; width:28px; height:28px; border-radius:14px; background:#333; color:#fff;
       font-size:16px; text-align:center; line-height:28px; margin-right:8px; vertical-align:3px }
-.d { font-size:15.5px; color:#555; line-height:21px; min-height:105px }
-.io { font-size:15.5px; line-height:21px }
+.runs { font-size:15px; color:#555 }
+.chip { display:inline-block; font-size:14px; font-weight:700; border-radius:10px;
+         padding:2px 10px; margin-left:4px }
+.d { font-size:16px; color:#333; line-height:22px; min-height:88px }
+.io { font-size:15px; line-height:20px; color:#444 }
 .in { color:#1a5fd0 }
-.cam { background:#f3effc; border-radius:6px; padding:5px 7px; color:#3b2a7a }
-.link { background:#e6f6f3; border-radius:6px; padding:5px 7px; color:#0b7f74; font-weight:500 }
+.cam { background:#f3effc; border-radius:6px; padding:5px 8px; color:#3b2a7a; font-size:15px;
+        line-height:20px }
+.wifi { border:2px solid #b9e3dc; border-radius:8px; padding:7px 8px; margin-top:auto;
+         display:flex; flex-direction:column; gap:4px }
+.load { font-size:14px; font-weight:800; border-radius:6px; padding:3px 8px; align-self:flex-start }
+.load.inl { display:inline-block }
+.wl { font-size:15px; line-height:20px; color:#174f49 }
+.wl b { color:#0b7f74 }
+.late b { color:#a3171d }
 .foot { font-size:18px; color:#444; margin-top:18px }
 .foot b { color:#0b7f74 }
 </style></head><body>
 <h1>Pringles from the cabinet: task pipeline</h1>
-<div class="sub">Stretch + wired room cameras + GPU server · what each step does, what the room cameras add, and what crosses the robot’s Wi-Fi</div>
-<div class="task"><u>Robot:</u> <span style="color:#5b3fb0">Acknowledge</span> → <span style="color:#1a5fd0">Navigate to the cabinet</span> → <span style="color:#a3171d">Open the cabinet</span> → <span style="color:#a3171d">Pick up the Pringles</span> → <span style="color:#1a5fd0">Return to the person</span> → <span style="color:#1d7a3a">Hand over</span></div>
-<div class="flow"><div class="panel" style="background:#efeafb"><div class="pt" style="color:#5b3fb0">Acknowledge</div><div class="row"><div class="card"><div class="ph">request + room-camera view<br><span>(image to add)</span></div>
+<div class="sub">Stretch robot + wired room cameras + GPU server · for each step: what runs where, what the room cameras add, and what crosses the robot’s Wi-Fi</div>
+<div class="task">Robot: <span style="color:#5b3fb0">Acknowledge</span> → <span style="color:#1a5fd0">Navigate to the cabinet</span> → <span style="color:#a3171d">Open the cabinet</span> → <span style="color:#a3171d">Pick up the Pringles</span> → <span style="color:#1a5fd0">Return to the person</span> → <span style="color:#1d7a3a">Hand over</span></div>
+<div class="legend"><span class="chip" style="color:#1f6f43;background:#dff3e6">Robot</span> runs on the robot &nbsp; <span class="chip" style="color:#5b3fb0;background:#ece6fb">Server</span> runs on the GPU server &nbsp;&nbsp;|&nbsp;&nbsp; <span class="load inl" style="background:#e9ecef;color:#555">Wi-Fi: none</span> <span class="load inl" style="background:#cfeee9;color:#0b5f57">Wi-Fi: tiny (bytes)</span> <span class="load inl" style="background:#0b7f74;color:#fff">Wi-Fi: one photo (~50 KB)</span> </div>
+<div class="flow"><div class="panel" style="background:#efeafb"><div class="pt" style="color:#5b3fb0">Acknowledge</div><div class="row"><div class="card"><div class="ph">room-camera view<br><span>(image to add)</span></div>
 <div class="t"><span class="n">1</span>Acknowledge</div>
-<div class="d">Person: “Can you give me the Pringles from the cabinet?” The server turns it into targets: the cabinet, the Pringles, and the person to deliver to.</div>
-<div class="io"><b class="in">Input:</b> text request; room camera images</div>
-<div class="io"><b class="in">Output:</b> cabinet view pose and person position in the map, each with its age</div>
-<div class="io cam"><b>Room cameras:</b> find the cabinet and the person (SAM 3 on the room views, depth from the map)</div>
-<div class="io link"><b>Link:</b> ↑ request text · ↓ targets + age</div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#e8f0fb"><div class="pt" style="color:#1a5fd0">Navigate to the cabinet</div><div class="row"><div class="card"><img class="pic" src="pick_img/global_nav.png">
+<div class="runs">Runs on <span class="chip" style="color:#5b3fb0;background:#ece6fb">Server</span></div>
+<div class="d">Turns “give me the Pringles from the cabinet” into two targets.</div>
+<div class="io"><b class="in">Input:</b> request text · room-camera images</div>
+<div class="io"><b class="in">Output:</b> cabinet view pose and person position, each with the time it was seen</div>
+<div class="cam"><b>Room cameras:</b> find the cabinet and the person</div>
+<div class="wifi"><div class="load" style="background:#cfeee9;color:#0b5f57">Wi-Fi: tiny (bytes)</div><div class="wl"><b>Robot → server:</b> request text</div><div class="wl"><b>Server → robot:</b> the two targets with their times</div><div class="wl late"><b>If late:</b> ask again</div></div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#e8f0fb"><div class="pt" style="color:#1a5fd0">Navigate to the cabinet</div><div class="row"><div class="card"><img class="pic" src="pick_img/global_nav.png">
 <div class="t"><span class="n">2</span>Global navigation</div>
-<div class="d">Nav2 on the robot drives to the cabinet’s view pose: AMCL on the 2D lidar, and the robot’s own costmap avoids obstacles.</div>
-<div class="io"><b class="in">Input:</b> 2D lidar scan; cabinet view pose</div>
-<div class="io"><b class="in">Output:</b> the robot is near the cabinet</div>
-<div class="io cam"><b>Room cameras:</b> confirm the cabinet’s position; send a new goal only if it changed</div>
-<div class="io link"><b>Link:</b> ↓ new goal only if the target changed · ↑ robot pose (status) · late → keep the current goal</div></div><div class="card"><img class="pic" src="pick_img/local_nav.png">
+<div class="runs">Runs on <span class="chip" style="color:#1f6f43;background:#dff3e6">Robot</span></div>
+<div class="d">Nav2 drives to the cabinet view pose. AMCL and the robot’s lidar avoid obstacles.</div>
+<div class="io"><b class="in">Input:</b> goal · 2D lidar scan</div>
+<div class="io"><b class="in">Output:</b> robot near the cabinet</div>
+<div class="cam"><b>Room cameras:</b> check the cabinet is still where the map says</div>
+<div class="wifi"><div class="load" style="background:#cfeee9;color:#0b5f57">Wi-Fi: tiny (bytes)</div><div class="wl"><b>Robot → server:</b> robot pose (status only)</div><div class="wl"><b>Server → robot:</b> a new goal, only if the target changed</div><div class="wl late"><b>If late:</b> keep driving to the current goal</div></div></div><div class="card"><img class="pic" src="pick_img/local_nav.png">
 <div class="t"><span class="n">3</span>Local navigation</div>
-<div class="d">Gripper camera: handle keypoint + RANSAC door plane. Rotate – translate – rotate to 0.7 m off the door.</div>
-<div class="io"><b class="in">Input:</b> one RGB-D image (robot stopped)</div>
-<div class="io"><b class="in">Output:</b> the robot is in position to open the cabinet</div>
-<div class="io cam"><b>Room cameras:</b> —</div>
-<div class="io link"><b>Link:</b> ↑ one JPEG · ↓ handle keypoint (depth stays on the robot) · late → retry</div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#fbe9e7"><div class="pt" style="color:#a3171d">Open the cabinet</div><div class="row"><div class="card"><div class="pics3"><img src="pick_img/grasp_handle.png"><img src="pick_img/open.png"><img src="pick_img/retract.png"></div>
+<div class="runs">Runs on <span class="chip" style="color:#1f6f43;background:#dff3e6">Robot</span><span class="chip" style="color:#5b3fb0;background:#ece6fb">Server</span></div>
+<div class="d">One photo → handle point (server). Door plane from depth (robot). Rotate – translate – rotate to 0.7 m.</div>
+<div class="io"><b class="in">Input:</b> one RGB-D image, robot stopped</div>
+<div class="io"><b class="in">Output:</b> robot in position to open the door</div>
+<div class="cam"><b>Room cameras:</b> —</div>
+<div class="wifi"><div class="load" style="background:#0b7f74;color:#fff">Wi-Fi: one photo (~50 KB)</div><div class="wl"><b>Robot → server:</b> one JPEG photo</div><div class="wl"><b>Server → robot:</b> the handle’s pixel position</div><div class="wl late"><b>If late:</b> take a new photo, ask again</div></div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#fbe9e7"><div class="pt" style="color:#a3171d">Open the cabinet</div><div class="row"><div class="card"><div class="pics3"><img src="pick_img/grasp_handle.png"><img src="pick_img/open.png"><img src="pick_img/retract.png"></div>
 <div class="t"><span class="n">4</span>Grasp · open · retract</div>
-<div class="d">Grasp the handle, open along the door arc (door radius R, wrist offset r, θ), then retract the arm and lower the wrist.</div>
-<div class="io"><b class="in">Input:</b> handle pose; door plane</div>
-<div class="io"><b class="in">Output:</b> the cabinet is open and the arm is clear of the door</div>
-<div class="io cam"><b>Room cameras:</b> optional: confirm the door is open</div>
-<div class="io link"><b>Link:</b> none · runs on the robot</div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#fbe9e7"><div class="pt" style="color:#a3171d">Pick up the Pringles</div><div class="row"><div class="card"><img class="pic" src="pick_img/retract.png">
+<div class="runs">Runs on <span class="chip" style="color:#1f6f43;background:#dff3e6">Robot</span></div>
+<div class="d">Grasp the handle, swing the door open along its arc, retract the arm.</div>
+<div class="io"><b class="in">Input:</b> handle position · door plane</div>
+<div class="io"><b class="in">Output:</b> cabinet open, arm clear of the door</div>
+<div class="cam"><b>Room cameras:</b> —</div>
+<div class="wifi"><div class="load" style="background:#e9ecef;color:#555">Wi-Fi: none</div><div class="wl">nothing crosses the Wi-Fi</div></div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#fbe9e7"><div class="pt" style="color:#a3171d">Pick up the Pringles</div><div class="row"><div class="card"><img class="pic" src="pick_img/retract.png">
 <div class="t"><span class="n">5</span>Detect</div>
-<div class="d">Gripper camera snapshot → YOLOE-seg (“pringles”) → mask × depth → 3-D centre. Small base moves if out of reach; detect again after each.</div>
-<div class="io"><b class="in">Input:</b> RGB-D snapshot; prompt</div>
-<div class="io"><b class="in">Output:</b> Pringles centre in the base frame</div>
-<div class="io cam"><b>Room cameras:</b> prior: where the Pringles are in the cabinet, if a room camera sees inside</div>
-<div class="io link"><b>Link:</b> ↑ one JPEG · ↓ best mask (or YOLOE on the robot: nothing) · late → retry once</div></div><div class="card"><img class="pic" src="pick_img/pick.png">
+<div class="runs">Runs on <span class="chip" style="color:#1f6f43;background:#dff3e6">Robot</span><span class="chip" style="color:#5b3fb0;background:#ece6fb">Server</span></div>
+<div class="d">One photo → Pringles mask (YOLOE). Mask × robot depth → 3-D centre.</div>
+<div class="io"><b class="in">Input:</b> one RGB-D image · “pringles”</div>
+<div class="io"><b class="in">Output:</b> Pringles centre in the robot frame</div>
+<div class="cam"><b>Room cameras:</b> hint where the Pringles are, if a camera sees inside</div>
+<div class="wifi"><div class="load" style="background:#0b7f74;color:#fff">Wi-Fi: one photo (~50 KB)</div><div class="wl"><b>Robot → server:</b> one JPEG photo</div><div class="wl"><b>Server → robot:</b> the best mask</div><div class="wl late"><b>If late:</b> retry once, then use YOLOE on the robot</div></div></div><div class="card"><img class="pic" src="pick_img/pick.png">
 <div class="t"><span class="n">6</span>Grasp + lift</div>
+<div class="runs">Runs on <span class="chip" style="color:#1f6f43;background:#dff3e6">Robot</span></div>
 <div class="d">IK: pre-grasp → approach → close the gripper → lift 10 cm.</div>
-<div class="io"><b class="in">Input:</b> object centre; joint states</div>
-<div class="io"><b class="in">Output:</b> the Pringles are in the gripper</div>
-<div class="io cam"><b>Room cameras:</b> —</div>
-<div class="io link"><b>Link:</b> none · runs on the robot</div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#e8f0fb"><div class="pt" style="color:#1a5fd0">Return to the person</div><div class="row"><div class="card"><div class="ph">room-camera view of the person<br><span>(image to add)</span></div>
+<div class="io"><b class="in">Input:</b> Pringles centre · joint states</div>
+<div class="io"><b class="in">Output:</b> Pringles in the gripper</div>
+<div class="cam"><b>Room cameras:</b> —</div>
+<div class="wifi"><div class="load" style="background:#e9ecef;color:#555">Wi-Fi: none</div><div class="wl">nothing crosses the Wi-Fi</div></div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#e8f0fb"><div class="pt" style="color:#1a5fd0">Return to the person</div><div class="row"><div class="card"><div class="ph">room-camera view of the person<br><span>(image to add)</span></div>
 <div class="t"><span class="n">7</span>Return</div>
-<div class="d">Nav2 on the robot drives to the person; the goal is updated when the room cameras see the person move.</div>
-<div class="io"><b class="in">Input:</b> person position + age; 2D lidar scan</div>
-<div class="io"><b class="in">Output:</b> the robot is in front of the person</div>
-<div class="io cam"><b>Room cameras:</b> live person position; re-sent when the person moves</div>
-<div class="io link"><b>Link:</b> ↓ person position + age · ↑ robot pose · stale → slow down, ask for an update</div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#e6f4ea"><div class="pt" style="color:#1d7a3a">Hand over</div><div class="row"><div class="card"><img class="pic" src="pick_img/handover.png">
+<div class="runs">Runs on <span class="chip" style="color:#1f6f43;background:#dff3e6">Robot</span></div>
+<div class="d">Nav2 drives to the person. The goal moves when the person moves.</div>
+<div class="io"><b class="in">Input:</b> person position · 2D lidar scan</div>
+<div class="io"><b class="in">Output:</b> robot in front of the person</div>
+<div class="cam"><b>Room cameras:</b> track the person</div>
+<div class="wifi"><div class="load" style="background:#cfeee9;color:#0b5f57">Wi-Fi: tiny (bytes)</div><div class="wl"><b>Robot → server:</b> robot pose (status only)</div><div class="wl"><b>Server → robot:</b> person position when it changes, with its time</div><div class="wl late"><b>If late:</b> slow down near the person, ask for an update</div></div></div></div></div><div class="arr">➜</div><div class="panel" style="background:#e6f4ea"><div class="pt" style="color:#1d7a3a">Hand over</div><div class="row"><div class="card"><img class="pic" src="pick_img/handover.png">
 <div class="t"><span class="n">8</span>Hand over</div>
-<div class="d">Raise the Pringles to hand height and hold; open the gripper when the person pulls (gripper effort changes).</div>
-<div class="io"><b class="in">Input:</b> gripper effort; person position</div>
+<div class="runs">Runs on <span class="chip" style="color:#1f6f43;background:#dff3e6">Robot</span></div>
+<div class="d">Hold the Pringles at hand height; open the gripper when the person pulls.</div>
+<div class="io"><b class="in">Input:</b> gripper effort</div>
 <div class="io"><b class="in">Output:</b> the person holds the Pringles</div>
-<div class="io cam"><b>Room cameras:</b> optional: person’s hand position</div>
-<div class="io link"><b>Link:</b> none · runs on the robot</div></div></div></div></div>
-<div class="foot">Room cameras are wired to the server, so they never load the robot’s Wi-Fi. <b>Only targets with their age, one JPEG per look and the answers cross the link</b>; depth, lidar scans and video stay on the robot. Every request carries an ID and capture time.</div>
+<div class="cam"><b>Room cameras:</b> —</div>
+<div class="wifi"><div class="load" style="background:#e9ecef;color:#555">Wi-Fi: none</div><div class="wl">nothing crosses the Wi-Fi</div></div></div></div></div></div>
+<div class="foot">Nav2, AMCL, obstacle avoidance, depth and the arm all run on the robot. The room cameras are wired to the server, so their images never use the robot’s Wi-Fi. <b>Over Wi-Fi: only targets with their times, one photo per look, and the short answers.</b></div>
 </body></html>
