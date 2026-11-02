@@ -1,11 +1,11 @@
-"""Coarse-to-fine pick architecture with the communication-aware layer.
+"""Coarse-to-fine pick architecture with the communication layer.
 
 Builds stretch_comms_architecture.html; render with render_diagram.js.
 Layout follows the group's original diagram; additions are in teal.
 """
 from pathlib import Path
 
-W, H = 2000, 1410
+W, H = 2000, 1360
 C = {
     'hw': ('#eef0f3', '#c3c7cf'),
     'loc': ('#e4eefb', '#a9c3ec'),
@@ -57,7 +57,7 @@ def line(pts, arrow=True, color='#222', dash=None, width=2.2):
 
 # ---------------- header ----------------
 out.append('<div class="hdr">Mobile Manipulation: Coarse-to-Fine Pick</div>')
-out.append('<div class="sub">with the communication-aware layer</div>')
+out.append('<div class="sub">system architecture with the communication layer</div>')
 out.append('<div class="stripe"></div>')
 
 # ---------------- left: robot ----------------
@@ -74,52 +74,49 @@ box(62, 410, 688, 125, 'loc', 'Localization', '2D grid ←')
 card(88, 452, 312, 68, 'AMCL', ['2D LiDAR · map-frame pose · 10 Hz'], dashed=False)
 card(430, 452, 296, 68, 'Map frame = twin frame', ['grid from the ED305 reference map'])
 
-# pick box
 box(62, 560, 688, 515, 'man', 'Coarse-to-fine pick', 'precision target')
 stages = [
-    ('1 · Coarse', 'room · ~10 cm', 'deadline ~ s',
-     'Global navigation', ['Nav2 to the view pose from the server',
-                           'AMCL pose · out: target in the head view'],
-     'link: ↓ target pose · if stale: last valid target, slow down', False),
-    ('2 · Mid', 'object · ~2 cm', 'deadline ~0.5–1 s',
-     'Look + align', ['head D435: SAM 3 mask → object cloud in base',
-                      'rotate–translate–rotate: object on arm line'],
-     'link: ↑ JPEG crop, ↓ mask · depth local · late → onboard', True),
-    ('3 · Fine', 'grasp · ~5 mm', 'local only',
-     'Grasp', ['gripper D405 at 10–30 cm: antipodal grasp',
-               'servo lift, arm, wrist · contact by effort'],
-     'link: none · runs entirely on the robot', True),
-    ('4 · Verify', 'retry or go', 'deadline ~1 s',
-     'Lift, retract, verify', ['grasp check: gripper aperture + D405 view',
-                               'fail → back to 2 · ok → return, hand over'],
-     'link: ↑ one D405 crop, optional · local check first', True),
+    ('1 · Coarse', 'room · ~10 cm', 'Global navigation',
+     ['Nav2 to the view pose from the server', 'AMCL pose · out: target in the head view'],
+     'link: ↓ target + view pose', False),
+    ('2 · Mid', 'object · ~2 cm', 'Look + align',
+     ['head D435: SAM 3 mask → object cloud in base',
+      'rotate–translate–rotate: object on arm line'],
+     'link: ↑ JPEG crop · ↓ mask · depth stays on the robot', True),
+    ('3 · Fine', 'grasp · ~5 mm', 'Grasp',
+     ['gripper D405 at 10–30 cm: antipodal grasp', 'servo lift, arm, wrist · contact by effort'],
+     'link: none', True),
+    ('4 · Verify', 'retry or go', 'Lift, retract, verify',
+     ['grasp check: gripper aperture + D405 view', 'fail → back to 2 · ok → return, hand over'],
+     'link: ↑ D405 crop (optional)', True),
 ]
 row_y = [602, 718, 834, 950]
-for (lab, l2, l3, title, lines, comm, dashed), y in zip(stages, row_y):
+for (lab, l2, title, lines, comm, dashed), y in zip(stages, row_y):
     out.append(
-        f'<div class="card stage" style="left:88px;top:{y}px;width:134px;height:104px">'
-        f'<div class="ct">{lab}</div><div class="cl">{l2}</div>'
-        f'<div class="cl comm">{l3}</div></div>')
+        f'<div class="card stage" style="left:88px;top:{y}px;width:134px;height:104px;'
+        f'padding-top:24px"><div class="ct">{lab}</div><div class="cl">{l2}</div></div>')
     card(238, y, 488, 104, title, lines, dashed=dashed, comm_line=comm)
 for y0, y1 in [(706, 718), (822, 834), (938, 950)]:
     line([(482, y0), (482, y1)])
 
-# comms awareness box (new)
-box(62, 1100, 688, 222, 'com', 'Comms awareness <span class="new">new</span>',
-    '')
-card(88, 1145, 200, 100, 'Link monitor',
-     ['RSSI · RTT · server queue', '+ link map ahead', '→ expected answer time'], new=True, title_size=18)
-card(306, 1145, 200, 100, 'Answer handler',
-     ['age of each answer', 'drop stale answers', 'late → onboard answer'], new=True, title_size=18)
-card(524, 1145, 202, 100, 'Comms-aware policy',
-     ['wait or use onboard', 'stop where link is good', 'slow down → Nav2'], new=True, title_size=18)
-text(88, 1260, 'the robot knows the link and the age of what it was told; the policy '
-     'decides who answers, when to send, how fast to move', 'note', w=640)
-line([(625, 1145), (625, 1077)], color=TEAL)
-text(636, 1081, 'per-stage decision', 'lbl teal')
-line([(288, 1195), (306, 1195)], color=TEAL)
-line([(506, 1195), (524, 1195)], color=TEAL)
-
+# comms bridge, robot side
+box(62, 1110, 688, 195, 'com', 'Comms bridge · robot', 'ROS 2 nodes')
+card(88, 1152, 200, 128, 'offload_client',
+     ['capture on trigger', 'resize + JPEG', 'ID · capture time · pose', 'timeout · retry · drop stale'],
+     new=True, title_size=18)
+card(306, 1152, 200, 128, 'link_monitor',
+     ['heartbeat: RTT, queue', 'RSSI (iw) + link map', '→ expected answer time'],
+     new=True, title_size=18)
+card(524, 1152, 202, 128, 'policy',
+     ['send when stopped', 'wait or onboard fallback', 'speed limit → Nav2'],
+     new=True, title_size=18)
+line([(306, 1216), (290, 1216)], color=TEAL)
+line([(506, 1216), (522, 1216)], color=TEAL)
+line([(300, 1077), (300, 1108)], color=TEAL)
+text(308, 1084, 'stage · capture trigger', 'lbl teal')
+line([(625, 1108), (625, 1077)], color=TEAL)
+text(470, 1084, 'results', 'lbl teal', w=148, align='right')
+text(633, 1084, 'speed limit', 'lbl teal')
 
 # ---------------- right: server ----------------
 text(800, 212, 'ED305 SERVER + INFRASTRUCTURE · RTX workstation · edge PC: '
@@ -127,13 +124,13 @@ text(800, 212, 'ED305 SERVER + INFRASTRUCTURE · RTX workstation · edge PC: '
 box(800, 245, 352, 210, 'twin', 'ED305 twin', 'offline')
 card(820, 290, 312, 82, 'Reference map',
      ['OS1 + GLIM, anchored', 'keyframes, objects · 2D grid export'], dashed=False)
-card(820, 382, 312, 60, 'Link map <span class="new">new</span>',
+card(820, 382, 312, 60, 'Link map',
      ['RSSI · RTT · goodput per cell, map frame'], new=True, title_size=18)
 
 box(1176, 245, 352, 210, 'hw', 'Camera network', '360° coverage')
 card(1196, 290, 312, 100, 'Infrastructure cameras',
      ['calibrated in the map frame', 'live object + person detections'])
-text(1196, 405, 'wired to the server: no load on the robot’s Wi-Fi', 'lbl teal', w=312)
+text(1196, 405, 'wired to the server', 'lbl', w=312)
 
 box(1552, 245, 388, 210, 'task', 'Task')
 card(1572, 290, 348, 100, 'Request → object query',
@@ -149,9 +146,6 @@ for x, t, l in oc:
     card(x, 530, 250, 98, t, l)
 for xa, xb in [(1650, 1627), (1375, 1352), (1100, 1077)]:
     line([(xa, 578), (xb, 578)])
-text(820, 650, 'the twin and the cameras say where the object is; the robot’s own '
-     'cameras refine it (stages 2–3)', 'note', w=1100, align='right')
-
 line([(1118, 455), (1118, 528)])
 text(1128, 462, 'keyframes, objects', 'lbl')
 line([(1437, 455), (1437, 528)])
@@ -159,70 +153,67 @@ text(1447, 462, 'images, detections', 'lbl')
 line([(1700, 455), (1700, 528)])
 text(1710, 462, 'object query', 'lbl')
 
-box(800, 728, 1140, 180, 'hw', 'Link robot ↔ server', 'Wi-Fi 5 GHz · ROS 2 topics')
-rows_l = [('↓ 2D grid', 'map frame · per map version'),
-          ('↓ Target + view pose', 'per request · with capture time'),
-          ('↓ Object mask', 'per crop · small <span class="new">new</span>')]
-rows_r = [('↑ RGB crop (JPEG)', 'on request · depth stays on robot'),
-          ('↑ Map-frame pose', '10 Hz · ~1 KB/s'),
-          ('↕ Heartbeat', '5–10 Hz · RTT, server queue <span class="new">new</span>')]
-for i, (a_, b_) in enumerate(rows_l):
-    text(822, 773 + i * 28, a_, 'lk')
-    text(1025, 775 + i * 28, b_, 'lv')
-for i, (a_, b_) in enumerate(rows_r):
-    text(1390, 773 + i * 28, a_, 'lk')
-    text(1590, 775 + i * 28, b_, 'lv')
-text(822, 870, 'no raw image streams · best effort, keep last 1 · priority for robot '
-     'requests · every message carries its capture time', 'lv teal', w=1100)
+# comms bridge, server side
+box(800, 728, 1140, 175, 'com', 'Comms bridge · server', 'ROS 2 nodes')
+card(1376, 773, 540, 112, 'offload_server',
+     ['decode JPEG → model input topic (SAM 3, YOLO, keypoints)',
+      'match result to request ID · add server timestamps',
+      'drop requests past their deadline · report queue length'],
+     new=True, title_size=18)
+card(822, 773, 530, 112, 'logger',
+     ['per request: capture, send, receive, answer times',
+      'size, stage, link state (RSSI, RTT)',
+      '→ link map of ED305'],
+     new=True, title_size=18)
+line([(1500, 773), (1500, 630)], color=TEAL)
+text(1508, 700, 'crop → image', 'lbl teal')
+line([(1460, 630), (1460, 771)], color=TEAL)
+text(1340, 700, 'mask', 'lbl teal', w=112, align='right')
 
-box(800, 935, 1140, 245, 'com', 'What comms contributes')
-contrib = [
-    ('1  Send less', 'JPEG crop on request instead of raw streams; mask comes back, depth stays on the robot', 'stage 2, 4'),
-    ('2  Know the link', 'link map of ED305 + live monitor → expected answer time before sending', 'all stages'),
-    ('3  Act only on fresh answers', 'every answer has an age; late or stale → last valid target or onboard detector', 'stage 1, 2'),
-    ('4  Move with the link', 'stop where the link is good to send; slow down when answers are stale', 'stage 1, 2'),
-]
-for i, (t, d, st) in enumerate(contrib):
-    y = 983 + i * 46
-    text(822, y, t, 'lk teal')
-    text(1100, y + 2, d, 'lv', w=680)
-    text(1800, y + 2, st, 'lv', w=120, align='right')
+box(800, 930, 1140, 210, 'hw', 'Link robot ↔ server', 'Wi-Fi 5 GHz · ROS 2 topics')
+rows_l = [('↓ 2D grid', 'map frame · per map version'),
+          ('↓ Target + view pose', 'per request · ID + capture time'),
+          ('↓ Object mask', 'per crop · small'),
+          ('↑ Map-frame pose', '10 Hz · ~1 KB/s')]
+rows_r = [('↑ RGB crop (JPEG)', 'on request · depth stays on robot'),
+          ('↑ D405 crop', 'optional, verify'),
+          ('↕ Heartbeat', '5–10 Hz · RTT, server queue')]
+for i, (a_, b_) in enumerate(rows_l):
+    text(822, 975 + i * 28, a_, 'lk')
+    text(1025, 977 + i * 28, b_, 'lv')
+for i, (a_, b_) in enumerate(rows_r):
+    text(1390, 975 + i * 28, a_, 'lk')
+    text(1590, 977 + i * 28, b_, 'lv')
+text(822, 1100, 'QoS: images best effort, keep last 1 · answers reliable · DSCP priority '
+     'for requests · DDS tuned for large messages · no raw image streams', 'lv teal', w=1100)
 
 # legend
-lg = [('hw', 'hardware, infra'), ('loc', 'localization'), ('man', 'manipulation, perception'),
-      ('twin', 'offline twin'), ('task', 'task'), ('com', 'comms (new)')]
-LX = [800, 985, 1160, 1425, 1590, 1765]
+lg = [('hw', 'hardware, infra, link'), ('loc', 'localization'), ('man', 'manipulation, perception'),
+      ('twin', 'offline twin'), ('task', 'task'), ('com', 'comms bridge')]
+LX = [800, 1010, 1185, 1450, 1615, 1745]
 for i, (k, s) in enumerate(lg):
     bg, bd = C[k]
     x = LX[i]
-    out.append(f'<div class="sw" style="left:{x}px;top:1242px;background:{bg};border-color:{bd}"></div>')
-    text(x + 40, 1240, s, 'lg')
-svg.append('<line x1="800" y1="1292" x2="830" y2="1292" stroke="#d6262c" '
+    out.append(f'<div class="sw" style="left:{x}px;top:1172px;background:{bg};border-color:{bd}"></div>')
+    text(x + 40, 1170, s, 'lg')
+svg.append('<line x1="800" y1="1222" x2="830" y2="1222" stroke="#d6262c" '
            'stroke-width="3" stroke-dasharray="9,6"/>')
-text(840, 1281, 'network: robot ↔ server', 'lg')
-out.append('<div class="sw" style="left:1090px;top:1281px;background:#fff;'
+text(840, 1211, 'network: robot ↔ server', 'lg')
+out.append('<div class="sw" style="left:1090px;top:1211px;background:#fff;'
            'border:2px dashed #aaa"></div>')
-text(1130, 1281, 'not built yet', 'lg')
-out.append(f'<div class="sw" style="left:1300px;top:1281px;background:#fff;'
-           f'border:2px dashed {TEAL}"></div>')
-text(1340, 1281, 'comms addition', 'lg')
-text(1530, 1281, 'solid: built in the cabinet-door demo (Nav2, AMCL)', 'lg')
+text(1130, 1211, 'not built yet', 'lg')
+text(1300, 1211, 'solid: built in the cabinet-door demo (Nav2, AMCL)', 'lg')
 
 # ---------------- cross arrows ----------------
-# reference map -> map frame
 line([(820, 340), (765, 340), (765, 487), (729, 487)])
-# AMCL -> global navigation
 line([(375, 522), (375, 600)])
 text(386, 538, 'map-frame pose', 'lbl')
-# target + view pose -> global navigation
 line([(825, 600), (785, 600), (785, 652), (729, 652)])
 text(806, 710, 'target + view pose', 'lbl')
-# sensors -> localization
 line([(262, 388), (262, 450)])
-# verify -> back to look + align
 line([(726, 1000), (742, 1000), (742, 760), (729, 760)])
-# heartbeat / link -> comms awareness
-line([(800, 885), (762, 885), (762, 1170), (752, 1170)], color=TEAL)
+# robot bridge <-> link <-> server bridge
+line([(800, 1035), (762, 1035), (762, 1195), (752, 1195)], color=TEAL)
 
 # divider
 svg.append(f'<line x1="775" y1="200" x2="775" y2="{H - 40}" stroke="#d6262c" '
