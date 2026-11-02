@@ -288,10 +288,147 @@ const IMG = (f) => path.join(__dirname, 'deck_img', f);
   drawRow(s, STEPS.slice(4), 1.2);
   s.addNotes('Detect sends one photo and gets the best mask back; depth stays on the robot. Grasp and hand over are local. Return uses the person position from the room cameras, with its time.');
 
-  // ---------- architecture with data flow (native shapes) ----------
+  // ---------- our own system architecture (multi-robot mapping, twin, simulation, radio) ----------
   pres.addSection({ title: 'Architecture' });
   s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
-  addT(s, 'System architecture and data flow', { placeholder: 'title' });
+  addT(s, 'System architecture', { placeholder: 'title' });
+  {
+    const k = 0.00648, X = (p) => 0.32 + p * k, Y = (p) => 1.05 + p * k, L = (p) => p * k;
+    const PAN = {
+      hw: ['F0F1F3', 'C3C7CF'], slam: ['E6EEF9', 'A9C3EC'], scene: ['FBEFD9', 'EFCB96'],
+      twin: ['E6F4EA', '9FD3AE'], sim: ['FCF3E3', 'EFCB96'], radio: ['EEEAF8', 'C3B2EC'],
+    };
+    const panel = (x1, y1, x2, y2, kind, title, right) => {
+      const [bg, bd] = PAN[kind];
+      s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: X(x1), y: Y(y1), w: L(x2 - x1), h: L(y2 - y1), rectRadius: 0.05,
+        fill: { color: bg }, line: { color: bd, width: 1 }, objectName: title + ' panel' });
+      addT(s, title, { x: X(x1) + 0.08, y: Y(y1) + 0.03, w: L(x2 - x1) * 0.62, h: 0.24, fontSize: 11, bold: true,
+        color: '1D1D1F', valign: 'middle', isTextBox: true, margin: 0, objectName: title + ' title' });
+      if (right) addT(s, right, { x: X(x1) + L(x2 - x1) * 0.45, y: Y(y1) + 0.03, w: L(x2 - x1) * 0.55 - 0.08, h: 0.24,
+        fontSize: 8, color: '555555', align: 'right', valign: 'middle', isTextBox: true, margin: 0, objectName: title + ' note' });
+    };
+    const card = (x1, y1, x2, y2, title, body, dashed) => {
+      s.addShape(pres.shapes.RECTANGLE, { x: X(x1), y: Y(y1), w: L(x2 - x1), h: L(y2 - y1), fill: { color: 'FFFFFF' },
+        line: { color: dashed ? 'BDBDBD' : 'B8BCC4', width: 1, dashType: dashed ? 'dash' : 'solid' }, objectName: title + ' card' });
+      const runs = [{ text: title, options: { bold: true, fontSize: 9.5, color: '1D1D1F', breakLine: !!body } }];
+      if (body) runs.push({ text: body, options: { fontSize: 7.5, color: '444444' } });
+      addT(s, runs, { x: X(x1) + 0.03, y: Y(y1) + 0.02, w: L(x2 - x1) - 0.06, h: L(y2 - y1) - 0.04, align: 'center',
+        valign: 'middle', isTextBox: true, margin: 0, objectName: title + ' text' });
+    };
+    const seg = (x1, y1, x2, y2, arrow, color, dash) => {
+      const o = { x: X(Math.min(x1, x2)), y: Y(Math.min(y1, y2)), w: L(Math.abs(x2 - x1)), h: L(Math.abs(y2 - y1)),
+        line: { color: color || '222222', width: 1.25, dashType: dash || 'solid' }, objectName: 'arrow' };
+      if (arrow) { if (x2 > x1 || y2 > y1) o.line.endArrowType = 'triangle'; else o.line.beginArrowType = 'triangle'; }
+      s.addShape(pres.shapes.LINE, o);
+    };
+    const path = (pts, color, dash) => pts.slice(1).forEach((p, i) => seg(pts[i][0], pts[i][1], p[0], p[1], i === pts.length - 2, color, dash));
+    const lab = (x, y, t, w) => addT(s, t, { x: X(x), y: Y(y), w: L(w || 150), h: 0.16, fontSize: 7.5, bold: true, color: '333333',
+      isTextBox: true, margin: 0, objectName: 'label ' + t });
+
+    // headers + network line
+    addT(s, 'ROBOT (each of 2) · Jetson Orin NX 16 GB · ROS 2 Humble', { x: X(12), y: Y(2), w: L(680), h: 0.2, fontSize: 9.5, bold: true, color: '333333', isTextBox: true, margin: 0, objectName: 'robot header' });
+    addT(s, 'SERVER · workstation with RTX GPU · ROS 2, Isaac Sim, Sionna RT', { x: X(750), y: Y(2), w: L(900), h: 0.2, fontSize: 9.5, bold: true, color: '333333', isTextBox: true, margin: 0, objectName: 'server header' });
+    s.addShape(pres.shapes.LINE, { x: X(725), y: Y(0), w: 0, h: L(880), line: { color: 'D6262C', width: 1.75, dashType: 'dash' }, objectName: 'network line' });
+
+    // ---- robot ----
+    panel(12, 42, 700, 183, 'hw', 'Sensors + robot');
+    [['Ouster LiDAR · 10 Hz', 37], ['IMU · 100 Hz', 256], ['Drive base', 475]].forEach(([t, x]) => card(x, 87, x + 200, 120, t));
+    [['RGB-D camera', 37], ['Wheel enc. (backup)', 256], ['Radio antenna', 475]].forEach(([t, x]) => card(x, 133, x + 200, 167, t));
+    panel(12, 212, 700, 360, 'slam', 'Start + odometry');
+    card(37, 257, 350, 345, 'Odometry source', 'LiDAR odometry ATE 1.0–4.4 cm\nfallback RKO-LIO · cuVSLAM 23–47 cm');
+    card(381, 257, 688, 345, 'Board start', 'ChArUco → initial guess in map\ndetection online: to build', true);
+    panel(12, 383, 700, 551, 'slam', 'Map localization', 'offline equivalent: 1.3 cm');
+    card(37, 428, 350, 527, 'Fused pose', '2Fast-2Lamaa / FAST-LIO2 odometry\n10 Hz, map frame, bounded error', true);
+    card(381, 428, 688, 527, 'map→odom', 'in map: scan-to-map on map tiles, 1–2 Hz\noutside: server SLAM correction\nserver lost: peer Swarm-SLAM', true);
+    panel(12, 573, 700, 815, 'slam', 'Link to server', 'rates estimated');
+    s.addShape(pres.shapes.RECTANGLE, { x: X(37), y: Y(616), w: L(651), h: L(188), fill: { color: 'FFFFFF' },
+      line: { color: 'BDBDBD', width: 1, dashType: 'dash' }, objectName: 'link table' });
+    const links = [
+      ['↑ Keyframe packs', 'scan + JPEG + pose · ~2 Hz · 0.5–1 MB/s → SLAM'],
+      ['↑ Map-frame pose', 'fused pose · 10 Hz · ~1 KB/s → robot prims'],
+      ['↓ Map tiles', 'twin map + new SLAM areas + scene edits · 1–5 MB, rare'],
+      ['↓ SLAM corrections', 'keyframe ID + pose · ~10 s · <100 B · outside map'],
+      ['↓ Control commands', 'from Isaac Sim / operator → drive base'],
+      ['↕ Peer (robot j)', 'Swarm-SLAM descriptors, scans · server lost only'],
+    ];
+    links.forEach(([a, b], i) => {
+      const yy = 626 + i * 29;
+      addT(s, a, { x: X(48), y: Y(yy), w: L(185), h: 0.17, fontSize: 8.5, bold: true, color: '1D1D1F', isTextBox: true, margin: 0, objectName: 'link ' + a });
+      addT(s, b, { x: X(240), y: Y(yy), w: L(440), h: 0.17, fontSize: 8, color: '444444', isTextBox: true, margin: 0, objectName: 'link value ' + a });
+    });
+    card(12, 838, 350, 892, 'Robot j', 'same stack · peer Swarm-SLAM');
+    card(375, 838, 700, 892, 'Clock sync', 'PTP / chrony: robots, server, sniffer', true);
+    // robot arrows
+    seg(313, 183, 313, 254, true); seg(450, 183, 450, 254, true);
+    seg(313, 345, 313, 425, true); lab(323, 352, 'odometry');
+    seg(450, 345, 450, 425, true); lab(460, 352, 'initial guess');
+    seg(381, 478, 352, 478, true);
+    seg(275, 527, 275, 613, true);
+    seg(181, 806, 181, 836, true); seg(181, 836, 181, 806, true);
+
+    // ---- server ----
+    panel(750, 42, 1146, 203, 'slam', 'Multi-Agent SLAM', 'centralised');
+    card(770, 90, 945, 181, 'Map store', 'keyframe packs in;\ntiles + corrections out', true);
+    card(957, 90, 1132, 181, 'Swarm-SLAM', 'inter-robot + map\n→ SLAM corrections');
+    seg(945, 135, 956, 135, true);
+    panel(1165, 42, 1562, 203, 'slam', 'Live mapping', 'GPU');
+    card(1185, 90, 1360, 181, 'Splat mapper', 'Gaussian-LIC\nROS 2 port', true);
+    card(1372, 90, 1547, 181, 'Live map', 'Gaussian splats\n+ LiDAR points', true);
+    seg(1132, 135, 1184, 135, true); seg(1360, 135, 1371, 135, true);
+    panel(1587, 42, 1887, 408, 'twin', 'Offline twin', 'versioned');
+    card(1607, 87, 1867, 145, 'Twin update', 're-run on stored keyframe packs', true);
+    card(1607, 165, 1867, 225, 'GLIM + BA', 'GLIM map, board check: 4 mm');
+    card(1607, 243, 1867, 302, 'Anchored map', 'reference ~1.3 cm · version n');
+    card(1607, 322, 1867, 382, 'LOD-3DGS + mesh', 'twin splats, radio mesh');
+    seg(1737, 145, 1737, 164, true); seg(1737, 225, 1737, 242, true); seg(1737, 302, 1737, 321, true);
+    panel(750, 228, 1562, 408, 'scene', 'Scene update');
+    card(775, 278, 1000, 380, 'Decomposition', 'segments, materials\nmaintenance: prune, reuse', true);
+    card(1025, 278, 1250, 380, 'Object retrieval', 'pose, point cloud, class\nfrom the asset library', true);
+    card(1275, 278, 1500, 380, 'Change detection', 'live scans vs current twin\nfree-space carving', true);
+    seg(1275, 330, 1251, 330, true); seg(1025, 330, 1001, 330, true);
+    seg(1411, 181, 1411, 276, true); lab(1421, 205, 'live map');
+    path([[1500, 352], [1575, 352], [1575, 115], [1605, 115]], '222222', 'dash');
+    panel(750, 437, 1887, 603, 'sim', 'Isaac Sim', 'USD stage');
+    card(775, 487, 1030, 580, 'Robot + antenna prims', 'one per robot, map-frame pose\nevery frame', true);
+    card(1053, 487, 1308, 580, 'Semantic layer', 'class + instance ID per prim\nfrom scene update', true);
+    card(1331, 487, 1586, 580, 'Gaussian layer', 'twin splats + live map\nRTX visuals', true);
+    card(1609, 487, 1865, 580, 'Mesh layer', 'physics, radio materials', true);
+    seg(893, 380, 893, 434, true); lab(903, 395, 'USD edits');
+    seg(1075, 380, 1075, 484, true); lab(1085, 395, 'classes, IDs');
+    seg(1350, 484, 1350, 382, true); lab(1238, 407, 'expected view');
+    seg(1527, 181, 1527, 484, true);
+    seg(1737, 382, 1737, 484, true); lab(1637, 446, 'splats, mesh', 95);
+    panel(750, 628, 1887, 782, 'radio', 'Sionna RT');
+    card(775, 676, 1025, 758, 'Scene export', 'USD to Mitsuba scene');
+    card(1050, 676, 1300, 758, 'Path solver', 'all Tx/Rx links');
+    card(1325, 676, 1575, 758, 'Channel output', 'CIR per link, radio map');
+    card(1600, 676, 1865, 758, 'Validation', 'measured CSI / RSSI (sniffer)\nvs simulated channel', true);
+    seg(1025, 717, 1049, 717, true); seg(1300, 717, 1324, 717, true); seg(1575, 717, 1599, 717, true);
+    seg(950, 603, 950, 673, true); lab(960, 630, 'meshes, materials, all Tx/Rx poses', 260);
+
+    // ---- across the network ----
+    path([[688, 636], [705, 636], [705, 110], [768, 110]]);         // keyframe packs -> map store
+    path([[770, 157], [715, 157], [715, 478], [691, 478]]);         // tiles + corrections -> map->odom
+    path([[688, 662], [735, 662], [735, 533], [773, 533]]);         // map-frame pose -> robot prims
+
+    // legend
+    const LGD = [['hw', 'robot hardware'], ['slam', 'SLAM, mapping'], ['scene', 'scene update'], ['twin', 'offline, per site'], ['sim', 'simulation'], ['radio', 'radio']];
+    LGD.forEach(([kk, t], i) => {
+      const [bg, bd] = PAN[kk], lx = 750 + i * 190;
+      s.addShape(pres.shapes.RECTANGLE, { x: X(lx), y: Y(812), w: L(28), h: L(16), fill: { color: bg }, line: { color: bd, width: 1 }, objectName: 'legend ' + t });
+      addT(s, t, { x: X(lx + 36), y: Y(808), w: L(150), h: 0.16, fontSize: 8.5, color: '333333', isTextBox: true, margin: 0, objectName: 'legend text ' + t });
+    });
+    s.addShape(pres.shapes.LINE, { x: X(750), y: Y(858), w: L(26), h: 0, line: { color: 'D6262C', width: 1.75, dashType: 'dash' }, objectName: 'legend network' });
+    addT(s, 'network: robot ↔ server and robot ↔ robot', { x: X(786), y: Y(849), w: L(340), h: 0.16, fontSize: 8.5, color: '333333', isTextBox: true, margin: 0, objectName: 'legend network text' });
+    s.addShape(pres.shapes.RECTANGLE, { x: X(1188), y: Y(851), w: L(28), h: L(16), fill: { color: 'FFFFFF' }, line: { color: 'AAAAAA', width: 1, dashType: 'dash' }, objectName: 'legend not built' });
+    addT(s, 'not built yet', { x: X(1224), y: Y(849), w: L(120), h: 0.16, fontSize: 8.5, color: '333333', isTextBox: true, margin: 0, objectName: 'legend not built text' });
+    addT(s, 'one map→odom owner at a time; server takes over on reconnect', { x: X(1360), y: Y(849), w: L(520), h: 0.16, fontSize: 8.5, italic: true, color: '666666', isTextBox: true, margin: 0, objectName: 'legend note' });
+  }
+  s.addNotes('Our own two-robot system: robots run odometry and map localization; the server runs multi-agent SLAM, live mapping, scene update, the offline twin, Isaac Sim and Sionna RT. Arrows across the red line are what crosses the network.');
+
+  // ---------- architecture with data flow (native shapes) ----------
+  s = pres.addSlide({ masterName: 'CONTENT', sectionTitle: 'Architecture' });
+  addT(s, 'Pick task: architecture and data flow', { placeholder: 'title' });
   const ST = {
     existing: { fill: 'F1F3F5', line: 'B8BEC6', dash: 'solid', w: 1, fg: '333333' },
     nav: { fill: 'E4EEFB', line: 'A9C3EC', dash: 'solid', w: 1, fg: '1A5FD0' },
