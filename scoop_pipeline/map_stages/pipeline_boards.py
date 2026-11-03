@@ -602,14 +602,19 @@ def sectionize(stamps, gap):
 # --------------------------------------------------------------------------- #
 #  Pose averaging
 # --------------------------------------------------------------------------- #
-def avg_T(Ts, weights=None, mad_k=3.0, floor_m=0.002):
+def avg_T(Ts, weights=None, mad_k=3.0, floor_m=0.002, floor_deg=None, return_keep=False):
     """Robust mean of SE(3) poses of a STATIC thing.
 
     Translation: MAD-gated weighted mean.  Rotation: Markley eigenvector
     quaternion mean (sign-invariant, so it is correct near 180 deg where the
     old sign(w) hemisphere flip failed).  Do NOT use on a moving camera.
 
-    Returns (T, n_used)."""
+    floor_deg (default None: off) also gates by rotation: a pose further from
+    the mean rotation than max(mad_k * MAD, 2.5 * median, floor_deg) degrees
+    is dropped too -- a planar PnP's mirror flip, which can land close in
+    translation but tens of degrees off (a single ArUco marker's ambiguity).
+
+    Returns (T, n_used), or (T, n_used, keep mask) with return_keep."""
     Ts = list(Ts)
     ts = np.array([T[:3, 3] for T in Ts], float)
     w = np.ones(len(Ts)) if weights is None else np.asarray(weights, float).copy()
@@ -625,15 +630,28 @@ def avg_T(Ts, weights=None, mad_k=3.0, floor_m=0.002):
     if keep.sum() < max(3, int(0.5 * len(Ts))):
         keep = np.ones(len(Ts), bool)
 
-    sel_t = ts[keep]
+    def mean_q(k):
+        sel_w = w[k] / w[k].sum()
+        Q = np.array([R_to_q(Ts[i][:3, :3]) for i in np.where(k)[0]], float)
+        M = (Q * sel_w[:, None]).T @ Q
+        _, evecs = np.linalg.eigh(M)
+        q = evecs[:, -1]
+        return -q if q[3] < 0 else q
+
+    q = mean_q(keep)
+    if floor_deg is not None:
+        Rm = make_T(np.zeros(3), q)[:3, :3]
+        a = np.array([ang_deg(Rm, T[:3, :3]) for T in Ts])
+        ak = a[keep]
+        mad_r = float(np.median(np.abs(ak - np.median(ak)))) * 1.4826
+        thr_r = max(mad_k * mad_r, 2.5 * float(np.median(ak)), float(floor_deg))
+        keep2 = keep & (a <= thr_r)
+        if keep2.sum() >= max(3, int(0.5 * len(Ts))):
+            keep = keep2
+            q = mean_q(keep)
     sel_w = w[keep] / w[keep].sum()
-    Q = np.array([R_to_q(Ts[i][:3, :3]) for i in np.where(keep)[0]], float)
-    M = (Q * sel_w[:, None]).T @ Q
-    _, evecs = np.linalg.eigh(M)
-    q = evecs[:, -1]
-    if q[3] < 0:
-        q = -q
-    return make_T(np.average(sel_t, axis=0, weights=sel_w), q), int(keep.sum())
+    T = make_T(np.average(ts[keep], axis=0, weights=sel_w), q)
+    return (T, int(keep.sum()), keep) if return_keep else (T, int(keep.sum()))
 
 
 def spread(Ts, Tavg):

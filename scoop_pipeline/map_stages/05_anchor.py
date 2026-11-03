@@ -310,8 +310,11 @@ def main():
             sub = [recs[i] for i in g]
             Ts = [r["T_world"] for r in sub]
             w = [r["n"] / max(r["reproj"], 0.05) ** 2 for r in sub]
-            Tw, nused = avg_T(Ts, weights=w)
-            sp = spread(Ts, Tw)
+            # outliers out: PnP gross errors by translation, mirror flips by
+            # rotation (more than 2 deg and well outside the section's own
+            # rotation scatter); the spread is of the sightings that are used
+            Tw, nused, keep = avg_T(Ts, weights=w, floor_deg=2.0, return_keep=True)
+            sp = spread([T for T, k in zip(Ts, keep) if k], Tw)
             secs.append({"index": gi, "T_world": Tw, "n": len(sub), "n_used": nused,
                          "t_start": sub[0]["t"], "t_end": sub[-1]["t"],
                          "mean_reproj": float(np.mean([r["reproj"] for r in sub])),
