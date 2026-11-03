@@ -3,7 +3,7 @@
 
     python3 scoop_pipeline/processing/crop_room.py <map .pcd/.ply> [<out>]
         [--margin 0.08] [--peak-frac 0.3] [--yaw DEG] [--bounds XMIN XMAX YMIN YMAX]
-        [--radius 0.05] [--min-neighbors 6]
+        [--radius 0.05] [--min-neighbors 6] [--z ZMIN ZMAX]
 
 e.g. the ceiling-cut copy of a mapping pass (06_cut):
     python3 scoop_pipeline/processing/crop_room.py \\
@@ -26,6 +26,8 @@ e.g. the ceiling-cut copy of a mapping pass (06_cut):
    walls' own scatter (a few cm) stays.
 4. Clean up: a point with fewer than --min-neighbors others within --radius
    (m) is a speck and goes.
+5. --z ZMIN ZMAX: also only that height range (e.g. the floor's reflections
+   below it out, the ceiling kept: a mesh for simulation keeps its ceiling).
 
 The output is in the input's frame (the anchored map's), colours kept;
 nothing is rotated. Floor and ceiling are 06_cut's job. Refuses to overwrite.
@@ -160,6 +162,7 @@ def main(argv=None):
                     metavar=("XMIN", "XMAX", "YMIN", "YMAX"))
     ap.add_argument("--radius", type=float, default=0.05)
     ap.add_argument("--min-neighbors", type=int, default=6)
+    ap.add_argument("--z", type=float, nargs=2, default=None, metavar=("ZMIN", "ZMAX"))
     a = ap.parse_args(argv)
     import open3d as o3d
     src = os.path.expanduser(a.src)
@@ -179,8 +182,10 @@ def main(argv=None):
         yaw, bounds, lines = room_bounds(xyz, a.peak_frac, a.yaw)
         print("\n".join(lines))
     inside = crop_mask(xyz, yaw, bounds, a.margin)
-    print("crop (+%.2f m): kept %d, dropped %d outside the walls"
-          % (a.margin, inside.sum(), (~inside).sum()))
+    if a.z is not None:
+        inside &= (xyz[:, 2] >= a.z[0]) & (xyz[:, 2] <= a.z[1])
+    print("crop (+%.2f m%s): kept %d, dropped %d outside"
+          % (a.margin, ", z %.2f .. %.2f" % tuple(a.z) if a.z else "", inside.sum(), (~inside).sum()))
     idx = np.flatnonzero(inside)
     ok = speck_mask(xyz[idx], a.radius, a.min_neighbors)
     print("clean: dropped %d specks (< %d neighbours within %.2f m)"
