@@ -297,10 +297,9 @@ class ArucoMarker(Board):
                       "marker_id": 43, "marker_len": 0.150, "tag_len": 0.200}
 
     marker_len is the black square's side (what the pose is measured on);
-    tag_len, the printed tag with its white border, is only recorded. Its axes
-    are a ChArUco board's -- x along the top edge, y down, z into the wall --
-    but its origin is its centre, so a sighting's position does not swing with
-    its rotation noise; frame_fix puts the origin where the config asks, so
+    tag_len, the printed tag with its white border, is only recorded. Its four
+    corners are laid out as a ChArUco board's are -- origin at the top-left
+    corner, x along the top edge, y down, z into the wall -- so frame_fix,
     the anchor frame and every caller treat it as a 1 x 1 board of side
     marker_len. Four points give the planar pose a mirror ambiguity at range:
     min_ambiguity_ratio (default 2.0) gates it as for a board."""
@@ -339,28 +338,10 @@ class ArucoMarker(Board):
             self.det = cv2.aruco.ArucoDetector(self.dict, dp)
         except AttributeError:
             self.det = None
-        h = self.marker_len / 2.0
-        # detectMarkers' corner order: top-left, top-right, bottom-right, bottom-left,
-        # about the marker's CENTRE (see frame_fix): the PnP translation is then the
-        # centre itself, which four corners fix far better than the rotation
-        self.obj = np.array([[-h, -h, 0], [h, -h, 0], [h, h, 0], [-h, h, 0]], dtype=np.float64)
+        L = self.marker_len
+        # detectMarkers' corner order: top-left, top-right, bottom-right, bottom-left
+        self.obj = np.array([[0, 0, 0], [L, 0, 0], [L, L, 0], [0, L, 0]], dtype=np.float64)
         self.reject = OrderedDict((k, 0) for k in REJECT_KEYS)
-
-    def frame_fix(self, axes="opencv", origin="corner"):
-        """As Board.frame_fix, for a marker whose native origin is its centre
-        (not a corner): with origin "center" a sighting's position is the PnP
-        translation untouched, so a few degrees of rotation noise -- or a
-        mirror flip that slips through the ambiguity gate -- does not move it.
-        On a corner origin the same noise swings the centre by up to a
-        half-diagonal (10 cm on 150 mm)."""
-        T = Board.frame_fix(self, axes, "corner")         # the axes; no offset
-        h = self.marker_len / 2.0
-        offsets = {"center": (0.0, 0.0), "corner": (-h, -h), "bottom_left": (-h, h)}
-        if origin not in offsets:
-            raise SystemExit("board_origin must be 'corner', 'bottom_left' or "
-                             "'center', got %r" % origin)
-        T[:3, 3] = [offsets[origin][0], offsets[origin][1], 0.0]
-        return T
 
     def describe(self):
         return ("marker '%s' [%s id %d] %.3f m black square%s | min_ambiguity %.1f, "
