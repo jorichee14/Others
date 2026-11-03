@@ -1,0 +1,53 @@
+{
+ "extends": "pipeline_config.json",
+ "_note": "mapping_20261103: mapping pass by mobile_2, written by run_pass.py --new-config; as 20261015: 02 BA on GLIM (traj_lidar_ba_glim.txt, the reference) -> 01 TSDF at 2 cm -> report -> 05 -> 10 -> finalize",
+ "dataset": {
+  "bag": "~/workspaces/isaac_ros-dev/data/work/20261103/mapping/mobile_2/ed305_dataset_mapping_2_retimed",
+  "traj": "traj_lidar_ba_glim.txt",
+  "machine": "mobile_2"
+ },
+ "01_build_map": {
+  "scan_voxel": 0.02,
+  "final_voxel": 0.02,
+  "fusion": "tsdf",
+  "tsdf": {
+   "trunc": 0.08,
+   "min_weight": 3
+  }
+ },
+ "02_bundle_adjust": {
+  "input": "traj_lidar.txt",
+  "output": "traj_lidar_ba_glim.txt"
+ },
+ "05_anchor": {
+  "boards_used": [
+   "marker_43"
+  ],
+  "anchor_board": "marker_43",
+  "fuse": {
+   "max_section_disagree_deg": 3.0,
+   "max_std_mm_by_board": {
+    "marker_43": 50.0
+   }
+  }
+ },
+ "07_build_cameras": {
+  "enabled": false
+ },
+ "08_emit_tfs": {
+  "enabled": false
+ },
+ "comms": {
+  "enabled": false,
+  "_note": "mapping mode: no wifi / ntp topics"
+ },
+ "boards": {
+  "marker_43": {
+   "type": "aruco",
+   "dictionary": "DICT_4X4_50",
+   "marker_id": 43,
+   "marker_len": 0.15,
+   "tag_len": 0.2
+  }
+ }
+}
