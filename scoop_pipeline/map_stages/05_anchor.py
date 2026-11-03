@@ -338,6 +338,9 @@ def main():
         anchor = min(instances, key=lambda i: i["sections"][0]["t_start"])
     anchor["is_anchor"] = True
     A0 = anchor["sections"][0]
+    # the anchor is section 0's robust mean (avg_T above: gross PnP errors and
+    # mirror flips out), over every sighting of that first visit -- not the
+    # first sighting alone
     T_world_boardA = A0["T_world"]
     print("\nanchor board: '%s' section 0 (%d samples, %s), first seen %.1f s"
           % (anchor["name"], A0["n"],
@@ -563,7 +566,7 @@ def main():
     have_mapzed = len(mz) > 0
     T_mapzed_boardA = None
     if have_mapzed:
-        T_mapzed_boardA, _ = avg_T(mz)
+        T_mapzed_boardA, _ = avg_T(mz, floor_deg=2.0)      # same outliers out as section 0
 
     # ------------------------- export --------------------------------------- #
     R_N_boardA = R_align @ R_world_boardA
