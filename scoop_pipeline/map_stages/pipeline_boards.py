@@ -93,6 +93,12 @@ class Board(object):
     cluster_link) because identical copies cannot be told apart from one image.
     """
 
+    def __new__(cls, name, cfg):
+        # "type": "aruco" in the registry: one plain ArUco marker (ArucoMarker)
+        if cls is Board and (cfg or {}).get("type") == "aruco":
+            return super(Board, cls).__new__(ArucoMarker)
+        return super(Board, cls).__new__(cls)
+
     def __init__(self, name, cfg):
         self.name = name
         self.cfg = dict(cfg)
@@ -282,6 +288,85 @@ class Board(object):
         (03_init) that assume at most one copy of the board is in frame."""
         cc, cid = self.corners_full(gray)
         return self.pose_from_corners(cc, cid, K, D)
+
+
+class ArucoMarker(Board):
+    """One plain ArUco marker as a board ("type": "aruco" in the registry):
+
+        "marker_43": {"type": "aruco", "dictionary": "DICT_4X4_50",
+                      "marker_id": 43, "marker_len": 0.150, "tag_len": 0.200}
+
+    marker_len is the black square's side (what the pose is measured on);
+    tag_len, the printed tag with its white border, is only recorded. Its four
+    corners are laid out as a ChArUco board's are -- origin at the top-left
+    corner, x along the top edge, y down, z into the wall -- so frame_fix,
+    the anchor frame and every caller treat it as a 1 x 1 board of side
+    marker_len. Four points give the planar pose a mirror ambiguity at range:
+    min_ambiguity_ratio (default 2.0) gates it as for a board."""
+
+    def __init__(self, name, cfg):
+        self.name = name
+        self.cfg = dict(cfg)
+        if cfg.get("marker_id") is None or cfg.get("marker_len") is None:
+            raise SystemExit("marker '%s': marker_id and marker_len (the black square, m) "
+                             "must be set in the config's \"boards\" block" % name)
+        self.marker_id = int(cfg["marker_id"])
+        self.marker_len = float(cfg["marker_len"])
+        self.tag_len = cfg.get("tag_len")
+        self.sx = self.sy = 1
+        self.square_len = self.marker_len            # size_m, frame_fix's centre
+        self.dict_name = cfg.get("dictionary", "DICT_4X4_50")
+        if self.dict_name not in _DICT:
+            raise SystemExit("marker '%s': unknown dictionary '%s'. known: %s"
+                             % (name, self.dict_name, ", ".join(sorted(_DICT))))
+        self.id_offset = self.marker_id
+        self.min_corners = int(cfg.get("min_corners", 4))
+        self.max_reproj = float(cfg.get("max_reproj", 1.5))
+        self.min_ambiguity = float(cfg.get("min_ambiguity_ratio", 2.0))
+        self.instances = max(1, int(cfg.get("instances", 1)))
+        self.instance_names = list(cfg.get("instance_names", []) or [])
+        self.frame_prefix = cfg.get("frame", None)
+        self.n_markers = 1
+        self.ids = np.array([self.marker_id], dtype=np.int32)
+        self.id_set = {self.marker_id}
+        self.dict = _get_dictionary(_DICT[self.dict_name])
+        self.board = None
+        self.new_api = hasattr(cv2.aruco, "ArucoDetector")
+        try:
+            dp = cv2.aruco.DetectorParameters()
+            dp.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+            self.det = cv2.aruco.ArucoDetector(self.dict, dp)
+        except AttributeError:
+            self.det = None
+        L = self.marker_len
+        # detectMarkers' corner order: top-left, top-right, bottom-right, bottom-left
+        self.obj = np.array([[0, 0, 0], [L, 0, 0], [L, L, 0], [0, L, 0]], dtype=np.float64)
+        self.reject = OrderedDict((k, 0) for k in REJECT_KEYS)
+
+    def describe(self):
+        return ("marker '%s' [%s id %d] %.3f m black square%s | min_ambiguity %.1f, "
+                "max_reproj %.2f px RMS"
+                % (self.name, self.dict_name, self.marker_id, self.marker_len,
+                   " (tag %.3f m)" % float(self.tag_len) if self.tag_len else "",
+                   self.min_ambiguity, self.max_reproj))
+
+    def corners_full(self, gray):
+        """The marker's four corners (sub-pixel), ids 0..3 in the order of
+        self.obj; the largest in the image if it is there more than once."""
+        if self.det is not None:
+            corners, ids, _ = self.det.detectMarkers(gray)
+        else:
+            dp = cv2.aruco.DetectorParameters_create()
+            dp.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+            corners, ids, _ = cv2.aruco.detectMarkers(gray, self.dict, parameters=dp)
+        if ids is None or len(ids) == 0:
+            return None, None
+        mine = [np.asarray(c, np.float64).reshape(4, 2)
+                for c, i in zip(corners, np.asarray(ids).flatten()) if int(i) == self.marker_id]
+        if not mine:
+            return None, None
+        c = max(mine, key=lambda q: cv2.contourArea(q.astype(np.float32)))
+        return c.reshape(4, 1, 2), np.arange(4, dtype=np.int32).reshape(4, 1)
 
 
 def _get_dictionary(dname):
