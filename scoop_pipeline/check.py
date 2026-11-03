@@ -49,6 +49,8 @@
   bags    <raw pass folder> do the robots' bags fit together in time? spans, the
                            window they all cover, missing split files and gaps
   spacing <bag> <topic>..  how evenly topics are spaced: intervals, gaps, repeats
+  gaps    <traj_lidar.txt> [--bag <raw bag>]  GLIM across each LiDAR outage against
+                           the live VSLAM odometry: did it keep track
   euroc   <export>/<robot> a datasets/euroc.py export's IMU against its images
   replica <dataset>        a Replica-format dataset fits itself (before SplaTAM)
 
@@ -284,7 +286,8 @@ SCRIPTS = {"env": "env_check.py", "decoder": "bag_check.py", "ouster": "ouster_c
            "sensors": "sync_quality.py", "glim": "glim_check.py",
            "topics": "show_topics.py",
            "bags": "bag_times.py",
-           "spacing": "topic_timing.py", "euroc": "imu_check.py", "replica": "replica_check.py"}
+           "spacing": "topic_timing.py", "gaps": "gap_motion.py",
+           "euroc": "imu_check.py", "replica": "replica_check.py"}
 
 
 def main():
