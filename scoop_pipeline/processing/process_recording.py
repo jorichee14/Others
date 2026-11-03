@@ -6,6 +6,7 @@ ZED SVO2 next to it -> a bag on the same clock.
         [--until decoded|retimed|glim|zed] [--redo decoded|retimed|glim|zed]
         [--only decoded|retimed|glim|zed]
         [--settings configs/recording.yaml] [--work-root <dir>] [--status]
+        [--glim-config configs/glim/<folder>]
     python processing/process_recording.py --save-ouster-metadata <bag or .mcap> <ns> <out.json>
 
 <raw recording folder> is a folder below data/raw/, e.g.
@@ -70,11 +71,17 @@ def main():
     ap.add_argument("--settings", default=None, help="default: configs/recording.yaml")
     ap.add_argument("--work-root", default=None, help="default: the 'work' folder next to 'raw'")
     ap.add_argument("--status", action="store_true", help="show what is done and stop")
+    ap.add_argument("--glim-config", default=None,
+                    help="GLIM's config folder for this run instead of the machine's in "
+                         "recording.yaml (relative to scoop_pipeline/, e.g. "
+                         "configs/glim/mobile_2_imu_gaps)")
     a = ap.parse_args()
     try:
         # the machine folder's own settings (recording.yaml machines:), e.g. mobile_2/
         settings = recording.settings_for(recording.load_settings(a.settings),
                                           os.path.basename(os.path.normpath(a.raw_dir)))
+        if a.glim_config:
+            settings["glim"] = dict(settings["glim"], config=a.glim_config)
         rec = recording.find_recording(a.raw_dir, a.work_root,
                                        settings["ouster"].get("packets_ns", "/ouster"),
                                        recording.zed_bags(settings["zed"]))

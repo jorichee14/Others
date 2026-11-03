@@ -9,6 +9,20 @@ comments, so they are not plain JSON.
 ```
 configs/glim/mobile_1/   /mobile_1/ouster/points, /mobile_1/ouster/imu
 configs/glim/mobile_2/   /mobile_2/ouster/points, /mobile_2/ouster/imu
+configs/glim/mobile_2_imu_gaps/  mobile_2's, global mapping without IMU factors
+```
+
+`mobile_2_imu_gaps` is for a recording whose Ouster stream stops for seconds
+(LiDAR and IMU together, e.g. 20261103 mapping: 63 outages up to 3.7 s at the
+recorder's file splits). An IMU factor across such a gap leaves the submap's
+velocity and bias unconstrained, and global mapping fails ("indeterminant linear
+system ... v88", "reset isam2" over and over, then a segfault). Without IMU
+factors the submaps are linked by GICP between-factors and loop closures alone;
+odometry still uses the IMU. Use it for one pass:
+
+```
+python3 scoop_pipeline/processing/process_recording.py <raw pass>/mobile_2 --only glim \
+    --glim-config configs/glim/mobile_2_imu_gaps
 ```
 
 `configs/recording.yaml` picks the folder: `glim.config` (mobile_1's, the top
