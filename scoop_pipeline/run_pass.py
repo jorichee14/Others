@@ -132,6 +132,15 @@ def machines(raw):
     return out
 
 
+def unindexed_bags(raw):
+    """Folders below raw with .mcap files and no metadata.yaml."""
+    out = []
+    for d, _, files in os.walk(raw):
+        if any(f.endswith(".mcap") for f in files) and "metadata.yaml" not in files:
+            out.append(d)
+    return sorted(out)
+
+
 def merged_bag(raw):
     """Where merge_session.py writes this pass's merged bag; None without bags."""
     from scoop import recording, session
@@ -624,6 +633,14 @@ def main():
     a = ap.parse_args()
     import pass_tf
     raw = os.path.abspath(os.path.expanduser(a.raw_dir))
+    unindexed = unindexed_bags(raw)
+    if unindexed:
+        raise SystemExit("bag folder(s) with .mcap files and no metadata.yaml (the recorder "
+                         "did not stop cleanly, or only the .mcap files were copied); every "
+                         "step finds a bag by it:\n%s\nwrite it first:\n  python3 %s %s"
+                         % ("\n".join("  " + b for b in unindexed),
+                            os.path.join(ROOT, "processing", "reindex_bag.py"),
+                            " ".join(unindexed)))
     if a.new_config:
         new_config(raw, a.robot, a.reference, boards_moved=a.boards_moved)
         return

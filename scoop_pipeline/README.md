@@ -32,6 +32,9 @@ configs/glim/<machine>/  GLIM's config folder per robot (configs/glim/README.md)
 configs/comms.yaml   which TF frame places each machine in the comms tables
 environment.yml      conda env for all offline processing
 processing/          raw recordings -> processed bags (command lines around scoop/)
+  reindex_bag.py     a bag folder of .mcap files with no metadata.yaml (recorder killed, or
+                     the .mcap files copied alone) -> its metadata.yaml, without ROS; a last
+                     file cut off is recovered first (original kept as .mcap.unindexed)
   process_recording.py  raw recording -> decoded, retimed, glim, zed (the usual entry point)
   decode_ouster.py   packets bag -> points bag (replaces the ouster_ros replay)
   retime.py          points bag -> retimed bag (same arguments as retime_bag.py)
