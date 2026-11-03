@@ -53,6 +53,9 @@ processing/          raw recordings -> processed bags (command lines around scoo
                      direct_visual_lidar_calibration
   run_dvlc.sh        that calibration (docker) on the pause bags: preprocess, guess, calibrate,
                      viewer; output owned by you
+  crop_room.py       a room's map without what lies outside its walls (found in the map: the
+                     walls' yaw and the outermost strong wall planes) and without specks;
+                     full resolution, colours, the input's frame (after 06_cut)
   convert_cloud.py   a point cloud to another format (pcd, ply, xyz, ...), optionally thinned
   rename_frames.py   rename TF frames in a bag (headers, Odometry child, /tf, /tf_static), e.g.
                      --suffix _mobile2 for a bag decoded before --frame-suffix
