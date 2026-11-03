@@ -636,8 +636,9 @@ def main():
     unindexed = unindexed_bags(raw)
     if unindexed:
         raise SystemExit("bag folder(s) with .mcap files and no metadata.yaml (the recorder "
-                         "did not stop cleanly, or only the .mcap files were copied); every "
-                         "step finds a bag by it:\n%s\nwrite it first:\n  python3 %s %s"
+                         "did not stop cleanly, the copy is not finished, or only the .mcap files "
+                         "were copied); every step finds a bag by it:\n%s\nif a copy is still "
+                         "running, wait for it; else write it:\n  python3 %s %s"
                          % ("\n".join("  " + b for b in unindexed),
                             os.path.join(ROOT, "processing", "reindex_bag.py"),
                             " ".join(unindexed)))
