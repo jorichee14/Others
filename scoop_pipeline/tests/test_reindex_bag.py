@@ -52,6 +52,9 @@ def make_bag(d, last_broken=True):
     for k in range(12):                    # _0 .. _11: the plain sort puts _10 before _2
         write_file(os.path.join(bag, "ed305_dataset_mapping_%d.mcap" % k), t0 + k * 10**9, 50,
                    finish=not (last_broken and k == 11))
+    old = os.path.getmtime(bag) - 3600          # finished an hour ago, not still copying
+    for f in os.listdir(bag):
+        os.utime(os.path.join(bag, f), (old, old))
     return bag, t0
 
 
@@ -85,6 +88,14 @@ def test_cut_off_last_file_recovered(d):
     bag, t0 = make_bag(d, last_broken=True)
     last = os.path.join(bag, "ed305_dataset_mapping_11.mcap")
     assert reindex_bag.summary_of(last) is None
+    os.utime(last)                                # still being copied: left alone
+    try:
+        reindex_bag.reindex(bag, log=lambda *a: None)
+    except SystemExit as e:
+        assert "copying" in str(e), e
+    else:
+        raise AssertionError("a file still being written was recovered")
+    os.utime(last, (os.path.getmtime(bag) - 3600,) * 2)
     try:
         reindex_bag.reindex(bag, recover_broken=False, log=lambda *a: None)
     except SystemExit as e:

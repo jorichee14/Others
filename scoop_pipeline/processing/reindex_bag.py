@@ -124,6 +124,12 @@ def reindex(folder, force=False, recover_broken=True, log=print):
     files = sorted(folder.glob("*.mcap"), key=natural)
     if not files:
         raise SystemExit("no .mcap files in %s" % folder)
+    import time
+    recent = [f.name for f in files if time.time() - f.stat().st_mtime < 60]
+    if recent:
+        raise SystemExit("%s: %s changed in the last minute -- still recording or copying? "
+                         "Run this once it has finished (the copy brings metadata.yaml last)"
+                         % (folder, ", ".join(recent)))
     log("%s: %d file(s), %s ... %s" % (folder, len(files), files[0].name, files[-1].name))
     nums = [int(m.group(1)) for m in (re.search(r"_(\d+)\.mcap$", f.name) for f in files) if m]
     missing = sorted(set(range(max(nums) + 1)) - set(nums)) if nums else []
