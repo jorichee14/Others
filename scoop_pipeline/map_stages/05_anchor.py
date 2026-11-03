@@ -428,8 +428,10 @@ def main():
         #         loop-closure evidence in the whole bag, and it is exactly the
         #         number the stage exists to produce.
         good = [sec for sec in secs if not sec["gated"]]
+        # the board's own spread gate (fuse.max_std_mm_by_board), as for good:
+        # a section the fusion takes must also be able to measure the loop
         meas = [sec for sec in secs
-                if sec["mean_reproj"] <= g_reproj and sec["std_mm"] <= g_std]
+                if sec["mean_reproj"] <= g_reproj and sec["std_mm"] <= g_std_for(inst["design"])]
         inst["meas"] = meas
         if not good:
             print("  ! no section passes the fusion gates -> board NOT written")
