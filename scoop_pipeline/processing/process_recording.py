@@ -6,7 +6,7 @@ ZED SVO2 next to it -> a bag on the same clock.
         [--until decoded|retimed|glim|zed] [--redo decoded|retimed|glim|zed]
         [--only decoded|retimed|glim|zed]
         [--settings configs/recording.yaml] [--work-root <dir>] [--status]
-        [--glim-config configs/glim/<folder>]
+        [--glim-config configs/glim/<folder>] [--min-range M]
     python processing/process_recording.py --save-ouster-metadata <bag or .mcap> <ns> <out.json>
 
 <raw recording folder> is a folder below data/raw/, e.g.
@@ -75,11 +75,16 @@ def main():
                     help="GLIM's config folder for this run instead of the machine's in "
                          "recording.yaml (relative to scoop_pipeline/, e.g. "
                          "configs/glim/mobile_2_imu_gaps)")
+    ap.add_argument("--min-range", type=float, default=None,
+                    help="m, the decode's near cut (ouster.driver_min_range in recording.yaml, "
+                         "1.30) for this run, e.g. 0.5 in a small room; with --redo decoded")
     a = ap.parse_args()
     try:
         # the machine folder's own settings (recording.yaml machines:), e.g. mobile_2/
         settings = recording.settings_for(recording.load_settings(a.settings),
                                           os.path.basename(os.path.normpath(a.raw_dir)))
+        if a.min_range is not None:
+            settings["ouster"] = dict(settings["ouster"], driver_min_range=a.min_range)
         if a.glim_config:
             settings["glim"] = dict(settings["glim"], config=a.glim_config)
         rec = recording.find_recording(a.raw_dir, a.work_root,
