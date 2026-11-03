@@ -114,15 +114,19 @@ class Sam3Segmenter:
         self.proc = Sam3Processor(build_sam3_image_model())
 
     def __call__(self, rgb, prompts, frame=None):
+        import torch
         from PIL import Image
-        state = self.proc.set_image(Image.fromarray(rgb))
-        out = []
-        for p in prompts:
-            r = self.proc.set_text_prompt(state=state, prompt=p)
-            masks, scores = _np(r["masks"]), _np(r["scores"]).reshape(-1)
-            masks = masks.reshape(len(scores), *masks.shape[-2:]) if len(scores) else masks
-            for m, s in zip(masks, scores):
-                out.append((p, m.astype(bool), float(s)))
+        # as SAM 3's own examples run it: bfloat16 autocast (parts of the model
+        # emit bfloat16; without it a float32 layer meets them and fails)
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            state = self.proc.set_image(Image.fromarray(rgb))
+            out = []
+            for p in prompts:
+                r = self.proc.set_text_prompt(state=state, prompt=p)
+                masks, scores = _np(r["masks"]), _np(r["scores"]).reshape(-1)
+                masks = masks.reshape(len(scores), *masks.shape[-2:]) if len(scores) else masks
+                for m, s in zip(masks, scores):
+                    out.append((p, m > 0.5 if m.dtype != bool else m, float(s)))
         return out
 
 
