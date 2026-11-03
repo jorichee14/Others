@@ -181,6 +181,11 @@ assets/              object asset management (the asset report's pipeline), on a
                      connected piece per mask), merged across frames by label and 3D
                      overlap -> objects.json, each object's measured points, its best
                      views' masks (SAM 3D's input)
+  views.py           every view of every registry object, before SAM 3D: its measured
+                     points projected into every frame, hidden ones (the map's depth nearer)
+                     left out; per view visible share, cut-off share, mask, range, and
+                     whether SAM 3 found it there (its recall); views ranked for SAM 3D,
+                     the best ones' masks written
 analysis/            measuring results; reads outputs, writes nothing back
   headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
                           against the fusion breaking points, like against like, log axis

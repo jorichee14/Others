@@ -22,6 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "assets"))
 
 import objects as ob                                                    # noqa: E402
+import views as vw                                                      # noqa: E402
 
 FAILED = []
 W, H, FX, CX, CY = 320, 240, 260.0, 160.0, 120.0
@@ -96,7 +97,9 @@ def render(P, I, C, T):
     return depth, ids, col
 
 
-def make_export(d, n_frames=16):
+def make_export(d, n_frames=16, missed=None):
+    """missed: {label: frames} the segmenter does not find it in."""
+    missed = missed or {}
     P, I, labels, C, objs = scene()
     ex = os.path.join(d, "export")
     os.makedirs(os.path.join(ex, "results"))
@@ -114,7 +117,7 @@ def make_export(d, n_frames=16):
         ms, ls, ss = [], [], []
         for k, lab in enumerate(labels, 1):
             m = ids == k
-            if m.sum() > 50:
+            if m.sum() > 50 and i not in missed.get(lab, ()):
                 # the segmenter's mask bleeds 2 px onto what is behind
                 ms.append(cv2.dilate(m.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0)
                 ls.append(lab); ss.append(0.9)
@@ -151,6 +154,40 @@ def test_registry_of_a_synthetic_room(d):
             assert os.path.isfile(os.path.join(out, "masks", "%s_%06d.png" % (r["id"], v["frame"])))
     f = json.load(open(os.path.join(out, "frames.json")))
     assert f["prompts"] == ["table", "chair"] and len(f["frames"]) == 16
+
+
+def test_all_views_include_the_missed_ones(d):
+    """The segmenter misses the chair in 4 frames: views.py finds it there,
+    marks those views unsegmented, ranks views for SAM 3D, writes masks."""
+    ex, masks, objs = make_export(d, missed={"chair": (2, 5, 9, 13)})
+    out = os.path.join(d, "registry")
+    ob.main([ex, out, "--prompts", "table,chair", "--segmenter", "npz:" + masks,
+             "--every", "1", "--min-points", "100"])
+    vw.main([ex, out, "--min-pixels", "200"])
+    reg = {r["id"]: r for r in json.load(open(os.path.join(out, "objects.json")))["objects"]}
+    chair = reg["chair_00"]
+    by = {v["frame"]: v for v in chair["views_all"]}
+    for f in (2, 5, 9, 13):
+        assert f in by and not by[f]["segmented"], (f, sorted(by))
+    assert chair["segmented"] == 12 and chair["seen"] >= 16, (chair["segmented"], chair["seen"])
+    for r in reg.values():
+        assert 1 <= len(r["best_for_3d"]) <= 5
+        ranks = [b["rank"] for b in r["best_for_3d"]]
+        assert ranks == sorted(ranks, reverse=True)
+        for b in r["best_for_3d"]:
+            m = cv2.imread(os.path.join(out, b["mask"]), cv2.IMREAD_GRAYSCALE)
+            assert m is not None and (m > 0).sum() >= 200
+        for v in r["views_all"]:
+            assert 0.1 <= v["visible"] <= 1.0 and 0.0 <= v["cut"] <= 1.0
+
+
+def test_occluded_points_are_not_visible():
+    """A point behind the measured surface at its pixel is hidden."""
+    depth = np.full((H, W), 2.0, np.float32)
+    T = np.eye(4)
+    P = np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 3.0], [0.1, 0.0, 2.02]])
+    v = vw.view_of(P, depth, K, T, 0.05, 0.02)
+    assert abs(v["visible"] - 2 / 3) < 1e-3, v
 
 
 def test_prompts_from_tags():
