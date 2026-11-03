@@ -174,6 +174,13 @@ datasets/            bags -> datasets for other tools
   lod3dgs.py         a replica export + the map as a LOD-3DGS (LetsGo) scene: COLMAP
                      layout with the known poses, depth for its depth loss, starting
                      points sampled from the trimmed Poisson mesh of the map
+assets/              object asset management (the asset report's pipeline), on a mapping pass
+  objects.py         the object registry: SAM 3 masks (text prompts, or RAM++ tags as
+                     prompts; or masks made elsewhere, npz) in a Replica-format export's
+                     posed, undistorted frames, lifted through the map's depth (largest
+                     connected piece per mask), merged across frames by label and 3D
+                     overlap -> objects.json, each object's measured points, its best
+                     views' masks (SAM 3D's input)
 analysis/            measuring results; reads outputs, writes nothing back
   headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
                           against the fusion breaking points, like against like, log axis
