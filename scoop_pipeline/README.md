@@ -210,6 +210,12 @@ analysis/            measuring results; reads outputs, writes nothing back
   headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
                           against the fusion breaking points, like against like, log axis
   maps.py, trajs.py  the map and trajectory checks, run through check.py (above)
+  twin_cloud.py      a USD digital twin's fixed geometry as a labelled point cloud
+                     (movable furniture left out; the twin itself stays out of the repo)
+  twin_compare.py    a map against twin_cloud's cloud, its furniture allowed to have moved:
+                     aligned on the room's planes only; room size and per-plane offset,
+                     tilt, scatter (map vs twin, measured alike); each fixed object found
+                     again: in place / moved (cm, deg) / not found
   (slam/channel_relay.py: ROS 2 relay between robot domains through scoop/channel.py;
    slam/run_swarm_slam.sh <export> <channel>: one Swarm-SLAM run per channel;
    slam/run_hydra.sh <hydra export> <channel>: every robot's Hydra streaming its
