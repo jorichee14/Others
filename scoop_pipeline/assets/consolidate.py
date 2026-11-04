@@ -7,6 +7,7 @@ false hits pruned.
         [--overlap 0.5] [--size-ratio 3] [--cell 0.05]
     python3 scoop_pipeline/assets/consolidate.py <registry> parts
         [--part-recall 0.3] [--contain 0.6] [--part-ratio 2] [--agree 0.5]
+        [--synonyms "desk,table;cabinet,shelf,rack;monitor,computer"]
     python3 scoop_pipeline/assets/consolidate.py <registry> prune
         [--min-views 5] [--min-recall 0.15] [--keep-views 20] [--keep-points 1000]
         [--room YAW XMIN XMAX YMIN YMAX] [--wall-tol 0.12] [--wall-share 0.8]
@@ -35,8 +36,9 @@ parts  (after views.py, before prune). Views decide what is a thing: a real
        into the bigger one, its name one more vote there. One that keeps its
        own identity and touches a bigger one (a fifth of its cells or more)
        is recorded "on" it.
-       Every object's name is then its views' vote: "agreement" is the top
-       name's share; under --agree the object is marked "uncertain": true.
+       Every object's name is then its views' vote: "agreement" is the share
+       of the top name and its --synonyms (desk / table is not a disagreement);
+       under --agree the object is marked "uncertain": true.
 prune  (after views.py). An object stays when SAM 3 segmented it in at least
        --min-views frames AND in at least --min-recall of the frames where it
        is in sight (views.py's segmented / seen): a real thing in view is
@@ -251,14 +253,18 @@ def label_votes(o):
     return {o["label"]: vote(o)}
 
 
+SYNONYMS = "desk,table;cabinet,shelf,rack;monitor,computer"
+
+
 def parts(reg, part_recall=0.3, contain=0.6, part_ratio=2.0, agree=0.5, cell=0.05, touch=0.2,
-          log=print):
+          synonyms=SYNONYMS, log=print):
     path = os.path.join(reg, "objects.json")
     doc = json.load(open(path))
     objs = doc["objects"]
     if any("views_all" not in o for o in objs):
         raise SystemExit("parts needs views.py's views_all: run views.py first")
     shutil.copy(path, os.path.join(reg, "objects_before_parts.json"))
+    syn = [{w.strip() for w in g.split(",") if w.strip()} for g in (synonyms or "").split(";") if g.strip()]
     pts = {o["id"]: read_ply(os.path.join(reg, o["points"])) for o in objs}
     keys = {o["id"]: cells(pts[o["id"]][0], cell) for o in objs}
     grown = {}
@@ -331,7 +337,8 @@ def parts(reg, part_recall=0.3, contain=0.6, part_ratio=2.0, agree=0.5, cell=0.0
         votes = label_votes(o)
         total = sum(votes.values())
         o["label"] = max(votes, key=votes.get)
-        o["agreement"] = round(votes[o["label"]] / total, 3) if total else 1.0
+        same = next((g for g in syn if o["label"] in g), {o["label"]})
+        o["agreement"] = round(sum(v for k, v in votes.items() if k in same) / total, 3) if total else 1.0
         o["uncertain"] = o["agreement"] < agree
     left.sort(key=lambda o: (o["label"], -o["n_points"]))
     ren = renumber(left)
@@ -456,6 +463,7 @@ def main(argv=None):
     ap.add_argument("--contain", type=float, default=0.6)
     ap.add_argument("--part-ratio", type=float, default=2.0)
     ap.add_argument("--agree", type=float, default=0.5)
+    ap.add_argument("--synonyms", default=SYNONYMS)
     ap.add_argument("--overlap", type=float, default=0.5)
     ap.add_argument("--size-ratio", type=float, default=3.0)
     ap.add_argument("--cell", type=float, default=0.05)
@@ -473,7 +481,8 @@ def main(argv=None):
     if a.step == "merge":
         objs = merge(reg, a.overlap, a.size_ratio, a.cell)
     elif a.step == "parts":
-        objs, _ = parts(reg, a.part_recall, a.contain, a.part_ratio, a.agree, a.cell)
+        objs, _ = parts(reg, a.part_recall, a.contain, a.part_ratio, a.agree, a.cell,
+                        synonyms=a.synonyms)
     else:
         objs, _ = prune(reg, a.min_views, a.min_recall, a.keep_views, a.keep_points, a.room,
                         a.wall_tol, a.wall_share, a.wall_extent)
