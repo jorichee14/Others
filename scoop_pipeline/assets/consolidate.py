@@ -6,7 +6,7 @@ false hits pruned.
     python3 scoop_pipeline/assets/consolidate.py <registry> merge
         [--overlap 0.5] [--size-ratio 3] [--cell 0.05]
     python3 scoop_pipeline/assets/consolidate.py <registry> parts
-        [--part-recall 0.5] [--contain 0.6] [--part-ratio 2] [--agree 0.5]
+        [--part-recall 0.3] [--contain 0.6] [--part-ratio 2] [--agree 0.5]
     python3 scoop_pipeline/assets/consolidate.py <registry> prune
         [--min-views 5] [--min-recall 0.15] [--keep-views 20] [--keep-points 1000]
         [--room YAW XMIN XMAX YMIN YMAX] [--wall-tol 0.12] [--wall-share 0.8]
@@ -27,9 +27,11 @@ parts  (after views.py, before prune). Views decide what is a thing: a real
        object that SAM 3 names on its own from some angle (a sofa's end called
        cabinet, a cushion called box) only now and then. An object at most
        1 / --part-ratio the size of another, with --contain of its 5 cm cells
-       in or touching (one cell) the other's, and a recall under --part-recall
-       (found in under half the frames it is in sight from: the views do not
-       agree it is a thing of its own) is a part of it: absorbed -- its points and segmented frames pooled
+       among the other's (it shares its surfaces; a thing standing on it only
+       touches them), and a recall under --part-recall (found in under 30 %
+       of the frames it is in sight from: the views do not agree it is a
+       thing of its own; ED305's real things: 35 % and up) is a part of it:
+       absorbed -- its points and segmented frames pooled
        into the bigger one, its name one more vote there. One that keeps its
        own identity and touches a bigger one (a fifth of its cells or more)
        is recorded "on" it.
@@ -249,7 +251,7 @@ def label_votes(o):
     return {o["label"]: vote(o)}
 
 
-def parts(reg, part_recall=0.5, contain=0.6, part_ratio=2.0, agree=0.5, cell=0.05, touch=0.2,
+def parts(reg, part_recall=0.3, contain=0.6, part_ratio=2.0, agree=0.5, cell=0.05, touch=0.2,
           log=print):
     path = os.path.join(reg, "objects.json")
     doc = json.load(open(path))
@@ -266,7 +268,7 @@ def parts(reg, part_recall=0.5, contain=0.6, part_ratio=2.0, agree=0.5, cell=0.0
         sid = o["id"]
         _, _, rec = recall_of(o)
         lo, hi = np.array(o["aabb_min"]) - cell, np.array(o["aabb_max"]) + cell
-        best, best_c = None, 0.0
+        best, best_c, best_t = None, 0.0, 0.0
         for b in alive.values():
             if b["id"] == sid or len(keys[b["id"]]) < part_ratio * len(keys[sid]):
                 continue
@@ -274,13 +276,16 @@ def parts(reg, part_recall=0.5, contain=0.6, part_ratio=2.0, agree=0.5, cell=0.0
                 continue
             if b["id"] not in grown:
                 grown[b["id"]] = dilate(keys[b["id"]])
-            c = sum(1 for k in keys[sid] if k in grown[b["id"]]) / max(len(keys[sid]), 1)
-            if c > best_c:
-                best, best_c = b, c
+            t = sum(1 for k in keys[sid] if k in grown[b["id"]]) / max(len(keys[sid]), 1)
+            c = sum(1 for k in keys[sid] if k in keys[b["id"]]) / max(len(keys[sid]), 1)
+            if (c, t) > (best_c, best_t):
+                best, best_c, best_t = b, c, t
         if best is None:
             continue
+        # a piece shares the bigger one's surfaces (its cells ARE the other's);
+        # a thing on it only touches them (its cells are next to the other's)
         if rec >= part_recall or best_c < contain:
-            if best_c >= touch and "on" not in o:          # a thing of its own, on / against it
+            if best_t >= touch and "on" not in o:          # a thing of its own, on / against it
                 o["on"] = best["id"]
             continue
         b = best
@@ -447,7 +452,7 @@ def main(argv=None):
                                  epilog=__doc__.split("\n\n", 1)[1])
     ap.add_argument("registry")
     ap.add_argument("step", choices=["merge", "parts", "prune"])
-    ap.add_argument("--part-recall", type=float, default=0.5)
+    ap.add_argument("--part-recall", type=float, default=0.3)
     ap.add_argument("--contain", type=float, default=0.6)
     ap.add_argument("--part-ratio", type=float, default=2.0)
     ap.add_argument("--agree", type=float, default=0.5)

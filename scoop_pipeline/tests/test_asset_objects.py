@@ -243,7 +243,8 @@ def test_parts_absorb_a_misnamed_piece_keep_a_thing_on_it(d):
     sight. parts: the cabinet goes into the table (a vote there), the cup
     stays, on the table."""
     cup = ("cup", [-1.8, 0.8, 0.80], [0.12, 0.12, 0.10], (230, 230, 40))
-    ex, masks, objs = make_export(d, extra=[cup])
+    # the cup is missed in half its frames: a real thing found only sometimes
+    ex, masks, objs = make_export(d, extra=[cup], missed={"cup": (0, 2, 4, 6, 8, 10, 12, 14)})
     e = ob.Export(ex)
     v, u = np.mgrid[0:H, 0:W]
     for i in (8, 13):
@@ -265,7 +266,7 @@ def test_parts_absorb_a_misnamed_piece_keep_a_thing_on_it(d):
     assert "cabinet" in {r["label"] for r in reg}, [r["id"] for r in reg]
     cs.main([out, "merge"])
     vw.main([ex, out, "--min-pixels", "50"])
-    cs.main([out, "parts"])
+    cs.main([out, "parts", "--part-recall", "0.55"])    # both under it: the cup touches, the piece is inside
     reg = json.load(open(os.path.join(out, "objects.json")))["objects"]
     labels = sorted(r["label"] for r in reg)
     assert labels == ["chair", "cup", "table", "table"], labels
