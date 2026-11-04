@@ -42,6 +42,10 @@ the robot standing still during each calibration.
                      (the optical frame of the room camera), with the quality
                      of each step under "quality"
   cameras.json       the same, with every robot pose and candidate
+  cameras_on_map.ply every camera on the whole map, one colour each (frustum
+                     + 1.5 m ray along its view; the robot's spot as a small frustum).
+                     Again from cameras.json without relocalizing:
+                     place_cameras.py show <out folder> --map <map>
   check_cam_<N>.ply  the robot's cloud (red) on the map round it (grey), the
                      robot (blue) and the room camera (green) as small frusta
 """
@@ -171,7 +175,60 @@ def write_check(path, scan_map, map_pts, T_lidar, T_cam, radius=7.0):
     write_ply(path, P, C.astype(np.uint8))
 
 
+COLOURS = [(30, 200, 60), (230, 40, 40), (40, 80, 230), (240, 170, 0), (200, 40, 200), (0, 190, 200),
+           (120, 60, 20), (255, 110, 160)]
+
+
+def write_all(path, map_pts, cams, max_map=2000000):
+    """Every camera on one map: the map grey (lighter higher up), each camera
+    a frustum and a 1.5 m ray along its view in its own colour, the robot
+    where it stood for that camera a smaller frustum in the same colour.
+    cams: [(name, T_map_cam, T_map_lidar or None)] -> legend [(name, rgb)]."""
+    from objects import write_ply
+    m = map_pts[:: max(1, len(map_pts) // max_map)]
+    z = m[:, 2]
+    g = (110 + 110 * np.clip((z - np.percentile(z, 2)) / max(np.ptp(z), 1e-6), 0, 1)).astype(np.uint8)
+    P, C, legend = [m], [np.c_[g, g, g]], []
+    for k, (name, Tc, Tl) in enumerate(cams):
+        col = COLOURS[k % len(COLOURS)]
+        ray = Tc[:3, 3] + np.linspace(0, 1.5, 300)[:, None] * Tc[:3, 2]
+        parts = [frustum(Tc, 0.5, 0.004), ray] + ([frustum(Tl, 0.3, 0.004)] if Tl is not None else [])
+        for q in parts:
+            P.append(q)
+            C.append(np.tile(col, (len(q), 1)))
+        legend.append((name, col))
+    write_ply(path, np.vstack(P), np.vstack(C).astype(np.uint8))
+    return legend
+
+
+def show(argv):
+    """place_cameras.py show <out folder> --map <map>: cameras_on_map.ply from
+    the out folder's cameras.json, nothing relocalized again."""
+    import open3d as o3d
+    ap = argparse.ArgumentParser(prog="place_cameras.py show")
+    ap.add_argument("out")
+    ap.add_argument("--map", required=True)
+    a = ap.parse_args(argv)
+    out = os.path.expanduser(a.out)
+    rows = json.load(open(os.path.join(out, "cameras.json")))["cameras"]
+    cams = [(r["camera"], T_of(r["T_map_cam"]["t"], r["T_map_cam"]["q"]),
+             T_of(r["T_map_lidar"]["t"], r["T_map_lidar"]["q"])) for r in rows]
+    map_pts = np.asarray(o3d.io.read_point_cloud(os.path.expanduser(a.map)).points)
+    report_all(out, map_pts, cams)
+
+
+def report_all(out, map_pts, cams):
+    f = os.path.join(out, "cameras_on_map.ply")
+    legend = write_all(f, map_pts, cams)
+    print("\nall cameras on one map -> %s" % f)
+    for name, col in legend:
+        print("  %-8s rgb %s  (big frustum + ray: the camera; small frustum: the robot)" % (name, col))
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "show":
+        return show(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__.split("\n\n", 1)[1])
@@ -269,11 +326,13 @@ def main(argv=None):
         yaml.safe_dump({"transforms": transforms}, fh, sort_keys=False)
     json.dump({"level": {"pitch_deg": pitch, "roll_deg": roll}, "cameras": rows},
               open(os.path.join(out, "cameras.json"), "w"), indent=1)
+    report_all(out, map_pts, [(r["camera"], T_of(r["T_map_cam"]["t"], r["T_map_cam"]["q"]),
+                               T_of(r["T_map_lidar"]["t"], r["T_map_lidar"]["q"])) for r in rows])
     if len(rows) > 1:
         print("\nwhere the robot stood for each calibration:")
         for r in rows:
             print("  %-8s %s" % (r["camera"], r["T_map_lidar"]["t"]))
-    print("-> %s (cameras.yaml, cameras.json, check_cam_*.ply)" % out)
+    print("-> %s (cameras.yaml, cameras.json, cameras_on_map.ply, check_cam_*.ply)" % out)
 
 
 if __name__ == "__main__":
