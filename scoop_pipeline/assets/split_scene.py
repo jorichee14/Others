@@ -7,7 +7,7 @@ own resolution, every mesh at several levels of detail.
         --room YAW XMIN XMAX YMIN YMAX
         [--assign 0.03] [--shell-tol 0.06]
         [--shell-voxel 0.08] [--other-voxel 0.04] [--object-voxel 0.02]
-        [--lod 1,0.3,0.1] [--no-mesh]
+        [--lod 1,0.3,0.1] [--no-mesh] [--mesh <the room meshed whole>]
 
 The map is the room at full resolution, coloured, in the registry's frame
 (ED305: ed305_room_ceil.ply, the anchored map cropped to the room with its
@@ -27,6 +27,13 @@ object's measured points). --room is crop_room.py's --yaw and --bounds.
    farther than 3 voxels from a point trimmed): the shell coarse (--shell-voxel), the other part in
    between, every object fine (--object-voxel): a big flat wall needs few
    faces, a monitor on a desk many.
+   With --mesh (recommended: the room's own mesh, e.g. lod3dgs.py mesh of the
+   same map) nothing is meshed again: each face of that mesh takes its
+   nearest map point's part, each part's faces are cut out and thinned by
+   quadric decimation to about one vertex per voxel x voxel of its area (a
+   wall to 8 cm, an object left at 2 cm), the cut edges held so the parts
+   still meet. Poisson on each part alone turns open pieces into blobs and
+   the coarse shell into wavy, blurred walls.
 5. Levels of detail: every mesh simplified to each --lod share of its faces
    (quadric decimation): <name>_lod0.ply (as meshed), _lod1, _lod2, ...
 
@@ -115,6 +122,49 @@ def mesh_levels(pc, centres, voxel, lods, out_stem, log=print):
     return out
 
 
+def label_faces(V, F, xyz, label, reach=0.10):
+    """Each face takes the label of the map point nearest its centre (-1,
+    "other", when none is within reach)."""
+    from scipy.spatial import cKDTree
+    d, j = cKDTree(xyz).query(V[F].mean(1), distance_upper_bound=reach, workers=-1)
+    out = np.full(len(F), -1, np.int64)
+    ok = np.isfinite(d)
+    out[ok] = label[j[ok]]
+    return out
+
+
+def sub_mesh(V, F, C, mask):
+    """The faces under mask as their own mesh (vertices renumbered)."""
+    import open3d as o3d
+    f = F[mask]
+    used, inv = np.unique(f, return_inverse=True)
+    m = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V[used]),
+                                  o3d.utility.Vector3iVector(inv.reshape(-1, 3).astype(np.int32)))
+    if C is not None:
+        m.vertex_colors = o3d.utility.Vector3dVector(C[used])
+    return m
+
+
+def thin_levels(m, voxel, lods, out_stem):
+    """A cut-out of the room mesh at its own resolution: decimated to about
+    one vertex per voxel x voxel of its area (never added to), then each lod
+    share of that; the cut edges held (boundary weight) so the parts still meet."""
+    import open3d as o3d
+    n = len(m.triangles)
+    want = int(max(4, min(n, 2.0 * m.get_surface_area() / voxel ** 2)))
+    base = m if want >= n else m.simplify_quadric_decimation(want, boundary_weight=1e4)
+    base.compute_vertex_normals()
+    out = []
+    for k, share in enumerate(lods):
+        mm = base if share >= 1.0 else base.simplify_quadric_decimation(
+            max(4, int(len(base.triangles) * share)), boundary_weight=1e4)
+        mm.compute_vertex_normals()
+        f = "%s_lod%d.ply" % (out_stem, k)
+        o3d.io.write_triangle_mesh(f, mm)
+        out.append((f, len(mm.triangles)))
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -132,6 +182,9 @@ def main(argv=None):
     ap.add_argument("--object-voxel", type=float, default=0.02)
     ap.add_argument("--lod", default="1,0.3,0.1")
     ap.add_argument("--no-mesh", action="store_true")
+    ap.add_argument("--mesh", default=None,
+                    help="the room already meshed (same frame): split it by the same labels and thin each "
+                         "part instead of meshing each part on its own")
     a = ap.parse_args(argv)
     import open3d as o3d
     import lod3dgs
@@ -153,15 +206,37 @@ def main(argv=None):
              "room": a.room, "floor_z": floor, "ceiling_z": ceil, "lod_shares": lods,
              "parts": {}, "objects": []}
 
+    fl = None
+    if a.mesh and not a.no_mesh:
+        rm = o3d.io.read_triangle_mesh(os.path.expanduser(a.mesh))
+        V, F = np.asarray(rm.vertices), np.asarray(rm.triangles)
+        C = np.asarray(rm.vertex_colors) if rm.has_vertex_colors() else None
+        if not len(F):
+            raise SystemExit("no faces in %s" % a.mesh)
+        lab = owner.copy()
+        lab[(owner < 0) & shell] = -2                                   # shell -2, other -1, object k
+        fl = label_faces(V, F, xyz, lab)
+        scene["mesh"] = os.path.abspath(os.path.expanduser(a.mesh))
+        print("room mesh %s: %d faces -> shell %d, other %d, objects %d"
+              % (a.mesh, len(F), int((fl == -2).sum()), int((fl == -1).sum()), int((fl >= 0).sum())))
+    codes = {"shell": -2, "other": -1}
+
     def part(name, mask, voxel, sub=""):
         sel = pc.select_by_index(np.flatnonzero(mask).tolist())
         pf = os.path.join(out, "points", sub, name + ".ply")
         o3d.io.write_point_cloud(pf, sel)
         rec = {"points": int(mask.sum()), "points_file": os.path.relpath(pf, out), "voxel": voxel}
-        if not a.no_mesh and mask.sum() >= 50:
-            lv = mesh_levels(sel, centres, voxel, lods, os.path.join(out, "meshes", sub, name))
+        stem = os.path.join(out, "meshes", sub, name)
+        if fl is not None:
+            fm = fl == codes.get(name, part.k)
+            if fm.sum() >= 4:
+                lv = thin_levels(sub_mesh(V, F, C, fm), voxel, lods, stem)
+                rec["levels"] = [{"file": os.path.relpath(f, out), "faces": n} for f, n in lv]
+        elif not a.no_mesh and mask.sum() >= 50:
+            lv = mesh_levels(sel, centres, voxel, lods, stem)
             rec["levels"] = [{"file": os.path.relpath(f, out), "faces": n} for f, n in lv]
         return rec
+    part.k = None
 
     print("meshing: shell at %.2f m, other at %.2f m, objects at %.2f m; levels %s"
           % (a.shell_voxel, a.other_voxel, a.object_voxel, a.lod))
@@ -169,6 +244,7 @@ def main(argv=None):
     scene["parts"]["other"] = part("other", (owner < 0) & ~shell, a.other_voxel)
     for k, o in enumerate(objs):
         m = owner == k
+        part.k = k
         rec = part(o["id"], m, a.object_voxel, "objects")
         rec.update({"id": o["id"], "label": o["label"], "agreement": o.get("agreement"),
                     "on": o.get("on"), "centroid": o["centroid"],

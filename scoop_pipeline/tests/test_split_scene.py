@@ -92,6 +92,34 @@ def test_split_and_levels(d):
     assert objs["monitor_00"]["on"] == "table_00"
 
 
+def test_split_given_mesh(d):
+    import open3d as o3d
+    sys.path.insert(0, os.path.join(ROOT, "datasets"))
+    import lod3dgs
+    mp, reg, tr, n = make(d)
+    pc = o3d.io.read_point_cloud(mp)
+    mesh, _ = lod3dgs.build_mesh(pc, lod3dgs.read_tum_positions(tr, 1), voxel=0.02, trim=0.05)
+    mf = os.path.join(d, "room_mesh.ply")
+    o3d.io.write_triangle_mesh(mf, mesh)
+    out = os.path.join(d, "scene")
+    ss.main([mp, reg, out, "--traj", tr, "--room", "0", "-4", "4", "-3", "3", "--mesh", mf,
+             "--shell-voxel", "0.10", "--other-voxel", "0.04", "--object-voxel", "0.02"])
+    sc = json.load(open(os.path.join(out, "scene.json")))
+    objs = {o["id"]: o for o in sc["objects"]}
+    sh = sc["parts"]["shell"]["levels"]
+    tab = objs["table_00"]["levels"]
+    assert sh[0]["faces"] > sh[1]["faces"] > sh[2]["faces"] > 0, sh
+    assert tab[0]["faces"] > tab[2]["faces"] > 0, tab
+    # the shell thinned to ~10 cm, the table kept fine: faces per m2
+    a_sh = o3d.io.read_triangle_mesh(os.path.join(out, sh[0]["file"])).get_surface_area()
+    a_tb = o3d.io.read_triangle_mesh(os.path.join(out, tab[0]["file"])).get_surface_area()
+    assert sh[0]["faces"] / a_sh < 0.3 * tab[0]["faces"] / a_tb, (sh[0]["faces"], a_sh, tab[0]["faces"], a_tb)
+    # the parts together cover the room mesh's area (nothing dropped at the cuts)
+    tot = a_sh + sum(o3d.io.read_triangle_mesh(os.path.join(out, r["levels"][0]["file"])).get_surface_area()
+                     for r in [sc["parts"]["other"]] + sc["objects"])
+    assert abs(tot - mesh.get_surface_area()) / mesh.get_surface_area() < 0.05, (tot, mesh.get_surface_area())
+
+
 def check(name, fn, *args):
     try:
         fn(*args)
