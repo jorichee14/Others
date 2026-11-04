@@ -456,7 +456,10 @@ def refit_object(O, Ov, M, z0, reach=3.0, near=0.05, keep_in_place=0.5, found=0.
         if np.degrees(np.arccos(np.clip(X[2, 2], -1, 1))) > 5.0:
             return None
         return (X,) + score(X)
-    best = fit(np.eye(4), (0.10, 0.05, 0.03))                         # where the twin has it
+    best = (np.eye(4), s0, m0)                                         # where the twin has it, as is
+    f = fit(np.eye(4), (0.10, 0.05, 0.03))                            # ... and settled by ICP
+    if f is not None and f[1] > best[1]:
+        best = f
     if best is None or best[1] < keep_in_place:
         for _, X0 in xy_search(Os, L, z0):
             f = fit(X0, (0.30, 0.10, 0.05))
