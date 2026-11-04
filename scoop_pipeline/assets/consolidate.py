@@ -6,7 +6,9 @@ false hits pruned.
     python3 scoop_pipeline/assets/consolidate.py <registry> merge
         [--overlap 0.5] [--size-ratio 3] [--cell 0.05]
     python3 scoop_pipeline/assets/consolidate.py <registry> prune
-        [--min-views 5] [--min-recall 0.15] [--keep-views 20]
+        [--min-views 5] [--min-recall 0.15] [--keep-views 20] [--keep-points 1000]
+        [--room YAW XMIN XMAX YMIN YMAX] [--wall-tol 0.12] [--wall-share 0.8]
+        [--wall-extent 1.5]
 
 merge  (after objects.py, before views.py). objects.py merges sightings of one
        label only, so a thing SAM 3 calls by several names (table / desk,
@@ -23,8 +25,15 @@ prune  (after views.py). An object stays when SAM 3 segmented it in at least
        found again and again, a false hit or a fragment now and then. One
        segmented in --keep-views frames or more stays whatever its recall (a
        real thing SAM 3 finds only from some sides: ED305's washing machine,
-       24 of 242 frames).
-       The dropped objects go to objects_pruned.json.
+       24 of 242 frames) if it holds --keep-points points or more (a piece
+       of something bigger that SAM 3 names on its own now and then is small).
+       --room (crop_room.py's --yaw and --bounds): an object with --wall-share
+       of its points within --wall-tol of a wall and --wall-extent or more
+       along it is the room's shell -- a wall, a door, a whiteboard SAM 3
+       masked with the wall round it -- and is dropped as "shell" (a cabinet
+       against a wall keeps its front 0.4 m or more out and stays).
+       The dropped objects go to objects_pruned.json (added to it when
+       prune runs again, each with why: "dropped_as").
 
 Each run keeps the registry it started from (objects_before_<step>.json);
 ids are renumbered per label (table_00, table_01, ...), points and masks
@@ -206,7 +215,29 @@ def merge(reg, overlap=0.5, size_ratio=3.0, cell=0.05, log=print):
     return merged
 
 
-def prune(reg, min_views=5, min_recall=0.15, keep_views=20, log=print):
+def on_walls(xyz, room, tol=0.12, share=0.8, extent=1.5):
+    """Is a point set the room's shell: most of it within tol of one of the
+    room's four walls (room = yaw deg, xmin, xmax, ymin, ymax, as crop_room)
+    and extent m or more along it? -> (bool, extent along the wall, m)."""
+    yaw, x0, x1, y0, y1 = room
+    a = np.radians(-yaw)
+    c, s_ = np.cos(a), np.sin(a)
+    x = c * xyz[:, 0] - s_ * xyz[:, 1]
+    y = s_ * xyz[:, 0] + c * xyz[:, 1]
+    best = 0.0
+    for d, along in ((np.abs(x - x0), y), (np.abs(x - x1), y), (np.abs(y - y0), x), (np.abs(y - y1), x)):
+        near = d <= tol
+        if near.mean() >= share:
+            lo, hi = np.percentile(along[near], [2, 98])
+            best = max(best, float(hi - lo))
+    near_any = np.minimum.reduce([np.abs(x - x0), np.abs(x - x1), np.abs(y - y0), np.abs(y - y1)]) <= tol
+    if near_any.mean() >= share and best == 0.0:          # along two walls round a corner
+        best = float(max(np.ptp(x[near_any]), np.ptp(y[near_any])))
+    return best >= extent, best
+
+
+def prune(reg, min_views=5, min_recall=0.15, keep_views=20, keep_points=1000, room=None,
+          wall_tol=0.12, wall_share=0.8, wall_extent=1.5, log=print):
     path = os.path.join(reg, "objects.json")
     doc = json.load(open(path))
     objs = doc["objects"]
@@ -218,7 +249,17 @@ def prune(reg, min_views=5, min_recall=0.15, keep_views=20, log=print):
         segm = len({v["frame"] for v in o["views"]})
         recall = o["segmented"] / max(o["seen"], 1)
         o["recall"] = round(recall, 4)
-        ok = (segm >= min_views and recall >= min_recall) or segm >= keep_views
+        ok = ((segm >= min_views and recall >= min_recall)
+              or (segm >= keep_views and o["n_points"] >= keep_points))
+        o.pop("dropped_as", None)
+        if not ok:
+            o["dropped_as"] = "rarely found" if segm >= min_views else "too few views"
+        if ok and room is not None:
+            shell, ext = on_walls(read_ply(os.path.join(reg, o["points"]))[0], room,
+                                  wall_tol, wall_share, wall_extent)
+            if shell:
+                ok = False
+                o["dropped_as"] = "shell (%.1f m along a wall)" % ext
         (keep if ok else drop).append(o)
     ids = {o["id"] for o in keep}
     for o in keep:
@@ -237,11 +278,23 @@ def prune(reg, min_views=5, min_recall=0.15, keep_views=20, log=print):
             o["on"] = ren[o["on"]]
     doc["objects"] = keep
     json.dump(doc, open(path, "w"), indent=1)
-    json.dump({"min_views": min_views, "min_recall": min_recall, "keep_views": keep_views,
-               "objects": drop},
-              open(os.path.join(reg, "objects_pruned.json"), "w"), indent=1)
-    log("prune (>= %d views and recall >= %.2f, or >= %d views): %d objects -> %d kept, %d dropped"
-        % (min_views, min_recall, keep_views, len(objs), len(keep), len(drop)))
+    pruned_p = os.path.join(reg, "objects_pruned.json")
+    earlier = json.load(open(pruned_p)) if os.path.isfile(pruned_p) else {}
+    runs = earlier.get("runs", [{k: earlier[k] for k in earlier if k != "objects"}] if earlier else [])
+    runs.append({"min_views": min_views, "min_recall": min_recall, "keep_views": keep_views,
+                 "keep_points": keep_points, "room": room, "dropped": len(drop)})
+    json.dump({"runs": runs, "objects": earlier.get("objects", []) + drop},
+              open(pruned_p, "w"), indent=1)
+    log("prune (>= %d views and recall >= %.2f, or >= %d views and >= %d points%s): "
+        "%d objects -> %d kept, %d dropped"
+        % (min_views, min_recall, keep_views, keep_points, "; room shell out" if room else "",
+           len(objs), len(keep), len(drop)))
+    from collections import Counter
+    for why, n in Counter(o["dropped_as"].split(" (")[0] for o in drop).items():
+        log("  dropped as %-14s %d" % (why + ":", n))
+    for o in drop:
+        if o["dropped_as"].startswith("shell"):
+            log("    %-22s %s" % (o["id"], o["dropped_as"]))
     return keep, drop
 
 
@@ -257,12 +310,19 @@ def main(argv=None):
     ap.add_argument("--min-views", type=int, default=5)
     ap.add_argument("--min-recall", type=float, default=0.15)
     ap.add_argument("--keep-views", type=int, default=20)
+    ap.add_argument("--keep-points", type=int, default=1000)
+    ap.add_argument("--room", type=float, nargs=5, default=None,
+                    metavar=("YAW", "XMIN", "XMAX", "YMIN", "YMAX"))
+    ap.add_argument("--wall-tol", type=float, default=0.12)
+    ap.add_argument("--wall-share", type=float, default=0.8)
+    ap.add_argument("--wall-extent", type=float, default=1.5)
     a = ap.parse_args(argv)
     reg = os.path.expanduser(a.registry)
     if a.step == "merge":
         objs = merge(reg, a.overlap, a.size_ratio, a.cell)
     else:
-        objs, _ = prune(reg, a.min_views, a.min_recall, a.keep_views)
+        objs, _ = prune(reg, a.min_views, a.min_recall, a.keep_views, a.keep_points, a.room,
+                        a.wall_tol, a.wall_share, a.wall_extent)
     from collections import Counter
     c = Counter(o["label"] for o in objs)
     print("by label: " + ", ".join("%s %d" % kv for kv in sorted(c.items())))

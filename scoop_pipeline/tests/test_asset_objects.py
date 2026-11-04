@@ -232,6 +232,27 @@ def test_consolidate_merges_names_keeps_things_on_others_prunes_false_hits(d):
             assert os.path.isfile(os.path.join(out, b["mask"])), b["mask"]
     pr = json.load(open(os.path.join(out, "objects_pruned.json")))["objects"]
     assert [p["label"] for p in pr] == ["plant"], [p["id"] for p in pr]
+    cs.main([out, "prune", "--min-views", "100"])        # again, stricter: added, not replaced
+    pr = json.load(open(os.path.join(out, "objects_pruned.json")))
+    assert pr["objects"][0]["label"] == "plant" and len(pr["objects"]) == 5 and len(pr["runs"]) == 2
+
+
+def test_shell_objects_found_on_walls():
+    """A 3 m strip on a wall is shell; a 0.8 m patch on it, a cabinet with its
+    front 0.5 m out, a strip 3 m long but mid-room are not."""
+    rng = np.random.default_rng(0)
+    room = (0.0, 0.0, 8.0, 0.0, 6.0)
+    strip = np.c_[rng.uniform(1, 4, 2000), rng.normal(0.02, 0.01, 2000), rng.uniform(0.5, 1.5, 2000)]
+    patch = np.c_[rng.uniform(1, 1.8, 500), rng.normal(0.02, 0.01, 500), rng.uniform(0.5, 1.5, 500)]
+    cab = np.c_[rng.uniform(1, 3, 1000), rng.normal(0.5, 0.01, 1000), rng.uniform(0, 0.8, 1000)]
+    mid = np.c_[rng.uniform(1, 4, 1000), rng.normal(3.0, 0.01, 1000), rng.uniform(0, 1, 1000)]
+    corner = np.r_[np.c_[rng.uniform(0, 2, 1000), np.full(1000, 0.03), rng.uniform(0, 2, 1000)],
+                   np.c_[np.full(1000, 0.03), rng.uniform(0, 2, 1000), rng.uniform(0, 2, 1000)]]
+    assert cs.on_walls(strip, room)[0] and cs.on_walls(corner, room)[0]
+    assert not cs.on_walls(patch, room)[0]
+    assert not cs.on_walls(cab, room)[0] and not cs.on_walls(mid, room)[0]
+    turned = strip @ np.array([[np.cos(0.1), -np.sin(0.1), 0], [np.sin(0.1), np.cos(0.1), 0], [0, 0, 1]]).T
+    assert cs.on_walls(turned, (np.degrees(0.1),) + room[1:])[0]
 
 
 def test_occluded_points_are_not_visible():
