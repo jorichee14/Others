@@ -6,7 +6,7 @@ false hits pruned.
     python3 scoop_pipeline/assets/consolidate.py <registry> merge
         [--overlap 0.5] [--size-ratio 3] [--cell 0.05]
     python3 scoop_pipeline/assets/consolidate.py <registry> prune
-        [--min-views 5] [--min-recall 0.15]
+        [--min-views 5] [--min-recall 0.15] [--keep-views 20]
 
 merge  (after objects.py, before views.py). objects.py merges sightings of one
        label only, so a thing SAM 3 calls by several names (table / desk,
@@ -20,7 +20,10 @@ merge  (after objects.py, before views.py). objects.py merges sightings of one
 prune  (after views.py). An object stays when SAM 3 segmented it in at least
        --min-views frames AND in at least --min-recall of the frames where it
        is in sight (views.py's segmented / seen): a real thing in view is
-       found again and again, a false hit or a fragment now and then.
+       found again and again, a false hit or a fragment now and then. One
+       segmented in --keep-views frames or more stays whatever its recall (a
+       real thing SAM 3 finds only from some sides: ED305's washing machine,
+       24 of 242 frames).
        The dropped objects go to objects_pruned.json.
 
 Each run keeps the registry it started from (objects_before_<step>.json);
@@ -203,7 +206,7 @@ def merge(reg, overlap=0.5, size_ratio=3.0, cell=0.05, log=print):
     return merged
 
 
-def prune(reg, min_views=5, min_recall=0.15, log=print):
+def prune(reg, min_views=5, min_recall=0.15, keep_views=20, log=print):
     path = os.path.join(reg, "objects.json")
     doc = json.load(open(path))
     objs = doc["objects"]
@@ -215,7 +218,8 @@ def prune(reg, min_views=5, min_recall=0.15, log=print):
         segm = len({v["frame"] for v in o["views"]})
         recall = o["segmented"] / max(o["seen"], 1)
         o["recall"] = round(recall, 4)
-        (keep if segm >= min_views and recall >= min_recall else drop).append(o)
+        ok = (segm >= min_views and recall >= min_recall) or segm >= keep_views
+        (keep if ok else drop).append(o)
     ids = {o["id"] for o in keep}
     for o in keep:
         if o.get("on") not in ids:
@@ -233,10 +237,11 @@ def prune(reg, min_views=5, min_recall=0.15, log=print):
             o["on"] = ren[o["on"]]
     doc["objects"] = keep
     json.dump(doc, open(path, "w"), indent=1)
-    json.dump({"min_views": min_views, "min_recall": min_recall, "objects": drop},
+    json.dump({"min_views": min_views, "min_recall": min_recall, "keep_views": keep_views,
+               "objects": drop},
               open(os.path.join(reg, "objects_pruned.json"), "w"), indent=1)
-    log("prune (>= %d views, recall >= %.2f): %d objects -> %d kept, %d dropped"
-        % (min_views, min_recall, len(objs), len(keep), len(drop)))
+    log("prune (>= %d views and recall >= %.2f, or >= %d views): %d objects -> %d kept, %d dropped"
+        % (min_views, min_recall, keep_views, len(objs), len(keep), len(drop)))
     return keep, drop
 
 
@@ -251,12 +256,13 @@ def main(argv=None):
     ap.add_argument("--cell", type=float, default=0.05)
     ap.add_argument("--min-views", type=int, default=5)
     ap.add_argument("--min-recall", type=float, default=0.15)
+    ap.add_argument("--keep-views", type=int, default=20)
     a = ap.parse_args(argv)
     reg = os.path.expanduser(a.registry)
     if a.step == "merge":
         objs = merge(reg, a.overlap, a.size_ratio, a.cell)
     else:
-        objs, _ = prune(reg, a.min_views, a.min_recall)
+        objs, _ = prune(reg, a.min_views, a.min_recall, a.keep_views)
     from collections import Counter
     c = Counter(o["label"] for o in objs)
     print("by label: " + ", ".join("%s %d" % kv for kv in sorted(c.items())))
