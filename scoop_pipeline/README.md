@@ -186,6 +186,9 @@ assets/              object asset management (the asset report's pipeline), on a
                      a much smaller one inside a bigger one recorded as "on" it); prune
                      (after views.py): fragments and false hits out by segmented views and
                      SAM 3's recall on the object (segmented / seen)
+  overview.py        the registry to look at: overview.ply (one colour per object) and
+                     overview_top.png (top-down, named, over the room); lists the objects
+                     that pooled several names and those kept with a low recall
   views.py           every view of every registry object, before SAM 3D: its measured
                      points projected into every frame, hidden ones (the map's depth nearer)
                      left out; per view visible share, cut-off share, mask, range, and
