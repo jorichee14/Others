@@ -56,6 +56,10 @@ processing/          raw recordings -> processed bags (command lines around scoo
   crop_room.py       a room's map without what lies outside its walls (found in the map: the
                      walls' yaw and the outermost strong wall planes) and without specks;
                      full resolution, colours, the input's frame (after 06_cut)
+  place_cameras.py   fixed room cameras in the map from their ChArUco extrinsics to the
+                     robot's colour camera: the robot placed by its still LiDAR cloud from
+                     each calibration bag (relocalized in the anchored map, no trajectory);
+                     cameras.yaml (map -> cam_N), check_cam_N.ply
   convert_cloud.py   a point cloud to another format (pcd, ply, xyz, ...), optionally thinned
   rename_frames.py   rename TF frames in a bag (headers, Odometry child, /tf, /tf_static), e.g.
                      --suffix _mobile2 for a bag decoded before --frame-suffix
