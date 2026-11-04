@@ -181,6 +181,11 @@ assets/              object asset management (the asset report's pipeline), on a
                      connected piece per mask), merged across frames by label and 3D
                      overlap -> objects.json, each object's measured points, its best
                      views' masks (SAM 3D's input)
+  consolidate.py     merge: one object per thing (several labels for one thing -- table /
+                     desk, monitor / computer -- merged by shared space and similar size;
+                     a much smaller one inside a bigger one recorded as "on" it); prune
+                     (after views.py): fragments and false hits out by segmented views and
+                     SAM 3's recall on the object (segmented / seen)
   views.py           every view of every registry object, before SAM 3D: its measured
                      points projected into every frame, hidden ones (the map's depth nearer)
                      left out; per view visible share, cut-off share, mask, range, and

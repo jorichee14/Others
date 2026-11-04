@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(ROOT, "assets"))
 
 import objects as ob                                                    # noqa: E402
 import views as vw                                                      # noqa: E402
+import consolidate as cs                                                # noqa: E402
 
 FAILED = []
 W, H, FX, CX, CY = 320, 240, 260.0, 160.0, 120.0
@@ -46,12 +47,12 @@ def box_surface(c, size, step=0.01):
     return np.vstack(pts)
 
 
-def scene():
+def scene(extra=()):
     """(points, object id per point: 0 room, 1.. objects, labels, colours)."""
     room = box_surface([0, 0, 1.25], [8, 6, 2.5], 0.03)
     objs = [("table", [-1.8, 0.8, 0.375], [1.2, 0.7, 0.75], (40, 160, 40)),
             ("table", [1.8, -0.9, 0.375], [1.2, 0.7, 0.75], (40, 160, 40)),
-            ("chair", [0.2, 1.6, 0.45], [0.5, 0.5, 0.9], (200, 40, 40))]
+            ("chair", [0.2, 1.6, 0.45], [0.5, 0.5, 0.9], (200, 40, 40))] + list(extra)
     P, I, C = [room], [np.zeros(len(room), int)], [np.tile((150, 150, 150), (len(room), 1))]
     for k, (_, c, s, col) in enumerate(objs, 1):
         p = box_surface(c, s, 0.008)
@@ -97,10 +98,10 @@ def render(P, I, C, T):
     return depth, ids, col
 
 
-def make_export(d, n_frames=16, missed=None):
+def make_export(d, n_frames=16, missed=None, extra=()):
     """missed: {label: frames} the segmenter does not find it in."""
     missed = missed or {}
-    P, I, labels, C, objs = scene()
+    P, I, labels, C, objs = scene(extra)
     ex = os.path.join(d, "export")
     os.makedirs(os.path.join(ex, "results"))
     masks = os.path.join(d, "masks")
@@ -179,6 +180,58 @@ def test_all_views_include_the_missed_ones(d):
             assert m is not None and (m > 0).sum() >= 200
         for v in r["views_all"]:
             assert 0.1 <= v["visible"] <= 1.0 and 0.0 <= v["cut"] <= 1.0
+
+
+def test_consolidate_merges_names_keeps_things_on_others_prunes_false_hits(d):
+    """Tables called 'desk' in odd frames, a cup on a table, a false 'plant'
+    in two frames: one object per table (both names kept), the cup on its
+    table, the plant pruned."""
+    cup = ("cup", [-1.8, 0.8, 0.80], [0.12, 0.12, 0.10], (230, 230, 40))
+    ex, masks, objs = make_export(d, extra=[cup])
+    for f in sorted(os.listdir(masks)):
+        i = int(f[:6])
+        z = np.load(os.path.join(masks, f))
+        ms, ls, ss = list(z["masks"]), list(z["labels"]), list(z["scores"])
+        if i % 2:
+            ls = ["desk" if l == "table" else l for l in ls]
+        if i in (7, 8):                                # one patch of wall, called a plant twice
+            e = ob.Export(ex)
+            dep, T = e.depth(i), e.poses[i]
+            v, u = np.mgrid[0:H, 0:W]
+            pc = np.dstack([(u - CX) * dep / FX, (v - CY) * dep / FX, dep]).reshape(-1, 3)
+            pw = pc @ T[:3, :3].T + T[:3, 3]
+            m = ((dep.reshape(-1) > 0) & (pw[:, 0] > 3.9) & (np.abs(pw[:, 1]) < 0.4)
+                 & (pw[:, 2] > 1.0) & (pw[:, 2] < 1.6)).reshape(H, W)
+            if m.sum() > 50:
+                ms.append(m); ls.append("plant"); ss.append(0.6)
+        np.savez(os.path.join(masks, f), masks=np.array(ms, bool).reshape(-1, H, W),
+                 labels=np.array(ls), scores=np.array(ss))
+    out = os.path.join(d, "registry")
+    ob.main([ex, out, "--prompts", "table,desk,chair,cup,plant", "--segmenter", "npz:" + masks,
+             "--every", "1", "--min-points", "20", "--erode", "1", "--max-depth", "8"])
+    before = json.load(open(os.path.join(out, "objects.json")))["objects"]
+    assert sorted(r["label"] for r in before).count("desk") == 2, [r["id"] for r in before]
+    cs.main([out, "merge"])
+    reg = json.load(open(os.path.join(out, "objects.json")))["objects"]
+    tables = [r for r in reg if set(r["labels"]) == {"table", "desk"}]
+    assert len(tables) == 2, [(r["id"], r["labels"]) for r in reg]
+    cupr = [r for r in reg if r["label"] == "cup"]
+    assert len(cupr) == 1 and cupr[0].get("on") in {t["id"] for t in tables}, cupr
+    near = min(tables, key=lambda t: np.linalg.norm(np.array(t["centroid"][:2]) - [-1.8, 0.8]))
+    assert cupr[0]["on"] == near["id"]
+    for r in reg:
+        assert os.path.isfile(os.path.join(out, r["points"])), r["points"]
+    vw.main([ex, out, "--min-pixels", "50"])
+    cs.main([out, "prune"])
+    reg = json.load(open(os.path.join(out, "objects.json")))["objects"]
+    assert "plant" not in {r["label"] for r in reg}, [r["id"] for r in reg]
+    assert sum(1 for r in reg if r["label"] in ("table", "desk")) == 2
+    for r in reg:
+        assert os.path.isfile(os.path.join(out, r["points"]))
+        for b in r["best_for_3d"]:
+            assert os.path.isfile(os.path.join(out, b["mask"])), b["mask"]
+    pr = json.load(open(os.path.join(out, "objects_pruned.json")))["objects"]
+    assert [p["label"] for p in pr] == ["plant"], [p["id"] for p in pr]
 
 
 def test_occluded_points_are_not_visible():
