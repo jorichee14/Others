@@ -193,6 +193,10 @@ assets/              object asset management (the asset report's pipeline), on a
   overview.py        the registry to look at: overview.ply (one colour per object) and
                      overview_top.png (top-down, named, over the room); lists the objects
                      that pooled several names and those kept with a low recall
+  split_scene.py     the room map split into structure and objects: each registry object's
+                     surfaces (map points near its own), the shell (floor, ceiling, walls),
+                     the rest ("other"); each part meshed at its own resolution (shell coarse,
+                     objects fine), every mesh at several levels of detail -> scene.json
   views.py           every view of every registry object, before SAM 3D: its measured
                      points projected into every frame, hidden ones (the map's depth nearer)
                      left out; per view visible share, cut-off share, mask, range, and
