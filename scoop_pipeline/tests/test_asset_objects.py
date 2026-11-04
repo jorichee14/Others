@@ -237,6 +237,50 @@ def test_consolidate_merges_names_keeps_things_on_others_prunes_false_hits(d):
     assert pr["objects"][0]["label"] == "plant" and len(pr["objects"]) == 5 and len(pr["runs"]) == 2
 
 
+def test_parts_absorb_a_misnamed_piece_keep_a_thing_on_it(d):
+    """One table's end is also called 'cabinet' in 2 of the ~8 frames it is in
+    sight from (a quarter of the table, from some angles only); a cup on that table is found whenever in
+    sight. parts: the cabinet goes into the table (a vote there), the cup
+    stays, on the table."""
+    cup = ("cup", [-1.8, 0.8, 0.80], [0.12, 0.12, 0.10], (230, 230, 40))
+    ex, masks, objs = make_export(d, extra=[cup])
+    e = ob.Export(ex)
+    v, u = np.mgrid[0:H, 0:W]
+    for i in (8, 13):
+        z = np.load(os.path.join(masks, "%06d.npz" % i))
+        ms, ls, ss = list(z["masks"]), list(z["labels"]), list(z["scores"])
+        dep, T = e.depth(i), e.poses[i]
+        pc = np.dstack([(u - CX) * dep / FX, (v - CY) * dep / FX, dep]).reshape(-1, 3)
+        pw = pc @ T[:3, :3].T + T[:3, 3]
+        end = ((dep.reshape(-1) > 0) & (pw[:, 0] < -2.1) & (pw[:, 0] > -2.45)
+               & (np.abs(pw[:, 1] - 0.8) < 0.4) & (pw[:, 2] < 0.8)).reshape(H, W)
+        if end.sum() > 30:
+            ms.append(end); ls.append("cabinet"); ss.append(0.7)
+        np.savez(os.path.join(masks, "%06d.npz" % i), masks=np.array(ms, bool).reshape(-1, H, W),
+                 labels=np.array(ls), scores=np.array(ss))
+    out = os.path.join(d, "registry")
+    ob.main([ex, out, "--prompts", "table,chair,cup,cabinet", "--segmenter", "npz:" + masks,
+             "--every", "1", "--min-points", "20", "--erode", "2"])    # the test masks bleed 2 px
+    reg = json.load(open(os.path.join(out, "objects.json")))["objects"]
+    assert "cabinet" in {r["label"] for r in reg}, [r["id"] for r in reg]
+    cs.main([out, "merge"])
+    vw.main([ex, out, "--min-pixels", "50"])
+    cs.main([out, "parts"])
+    reg = json.load(open(os.path.join(out, "objects.json")))["objects"]
+    labels = sorted(r["label"] for r in reg)
+    assert labels == ["chair", "cup", "table", "table"], labels
+    near = min((r for r in reg if r["label"] == "table"),
+               key=lambda t: np.linalg.norm(np.array(t["centroid"][:2]) - [-1.8, 0.8]))
+    assert "cabinet" in near["labels"] and [p["label"] for p in near.get("parts", [])] == ["cabinet"]
+    assert near["agreement"] > 0.5 and not near["uncertain"]
+    cupr = [r for r in reg if r["label"] == "cup"][0]
+    assert cupr.get("on") == near["id"], cupr.get("on")
+    ab = json.load(open(os.path.join(out, "objects_absorbed.json")))["absorbed"]
+    assert [a["label"] for a in ab] == ["cabinet"] and ab[0]["into"] == near["id"]
+    for r in reg:
+        assert os.path.isfile(os.path.join(out, r["points"]))
+
+
 def test_shell_objects_found_on_walls():
     """A 3 m strip on a wall is shell; a 0.8 m patch on it, a cabinet with its
     front 0.5 m out, a strip 3 m long but mid-room are not."""

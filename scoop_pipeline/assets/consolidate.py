@@ -5,6 +5,8 @@ false hits pruned.
 
     python3 scoop_pipeline/assets/consolidate.py <registry> merge
         [--overlap 0.5] [--size-ratio 3] [--cell 0.05]
+    python3 scoop_pipeline/assets/consolidate.py <registry> parts
+        [--part-recall 0.5] [--contain 0.6] [--part-ratio 2] [--agree 0.5]
     python3 scoop_pipeline/assets/consolidate.py <registry> prune
         [--min-views 5] [--min-recall 0.15] [--keep-views 20] [--keep-points 1000]
         [--room YAW XMIN XMAX YMIN YMAX] [--wall-tol 0.12] [--wall-share 0.8]
@@ -19,6 +21,20 @@ merge  (after objects.py, before views.py). objects.py merges sightings of one
        kept apart and recorded as "on" it (a monitor on a desk). Merged
        objects pool their points and views; the label is the vote of their
        views (distinct frames x mean score), all names kept in "labels".
+parts  (after views.py, before prune). Views decide what is a thing: a real
+       thing (a monitor on a desk, a box on a shelf) is found again in most
+       frames it is in sight from (views.py's recall); a piece of a bigger
+       object that SAM 3 names on its own from some angle (a sofa's end called
+       cabinet, a cushion called box) only now and then. An object at most
+       1 / --part-ratio the size of another, with --contain of its 5 cm cells
+       in or touching (one cell) the other's, and a recall under --part-recall
+       (found in under half the frames it is in sight from: the views do not
+       agree it is a thing of its own) is a part of it: absorbed -- its points and segmented frames pooled
+       into the bigger one, its name one more vote there. One that keeps its
+       own identity and touches a bigger one (a fifth of its cells or more)
+       is recorded "on" it.
+       Every object's name is then its views' vote: "agreement" is the top
+       name's share; under --agree the object is marked "uncertain": true.
 prune  (after views.py). An object stays when SAM 3 segmented it in at least
        --min-views frames AND in at least --min-recall of the frames where it
        is in sight (views.py's segmented / seen): a real thing in view is
@@ -215,6 +231,133 @@ def merge(reg, overlap=0.5, size_ratio=3.0, cell=0.05, log=print):
     return merged
 
 
+def dilate(keys):
+    """A cell set grown by one cell (26-neighbourhood)."""
+    off = [(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1)]
+    return {(k[0] + a, k[1] + b, k[2] + c) for k in keys for a, b, c in off}
+
+
+def recall_of(o):
+    seen = {v["frame"] for v in o.get("views_all", [])}
+    segm = {v["frame"] for v in o["views"]} & seen
+    return len(segm), len(seen), len(segm) / max(len(seen), 1)
+
+
+def label_votes(o):
+    if o.get("labels"):
+        return dict(o["labels"])
+    return {o["label"]: vote(o)}
+
+
+def parts(reg, part_recall=0.5, contain=0.6, part_ratio=2.0, agree=0.5, cell=0.05, touch=0.2,
+          log=print):
+    path = os.path.join(reg, "objects.json")
+    doc = json.load(open(path))
+    objs = doc["objects"]
+    if any("views_all" not in o for o in objs):
+        raise SystemExit("parts needs views.py's views_all: run views.py first")
+    shutil.copy(path, os.path.join(reg, "objects_before_parts.json"))
+    pts = {o["id"]: read_ply(os.path.join(reg, o["points"])) for o in objs}
+    keys = {o["id"]: cells(pts[o["id"]][0], cell) for o in objs}
+    grown = {}
+    alive = {o["id"]: o for o in objs}
+    absorbed = []
+    for o in sorted(objs, key=lambda o: len(keys[o["id"]])):          # smallest first
+        sid = o["id"]
+        _, _, rec = recall_of(o)
+        lo, hi = np.array(o["aabb_min"]) - cell, np.array(o["aabb_max"]) + cell
+        best, best_c = None, 0.0
+        for b in alive.values():
+            if b["id"] == sid or len(keys[b["id"]]) < part_ratio * len(keys[sid]):
+                continue
+            if (lo > np.array(b["aabb_max"])).any() or (hi < np.array(b["aabb_min"])).any():
+                continue
+            if b["id"] not in grown:
+                grown[b["id"]] = dilate(keys[b["id"]])
+            c = sum(1 for k in keys[sid] if k in grown[b["id"]]) / max(len(keys[sid]), 1)
+            if c > best_c:
+                best, best_c = b, c
+        if best is None:
+            continue
+        if rec >= part_recall or best_c < contain:
+            if best_c >= touch and "on" not in o:          # a thing of its own, on / against it
+                o["on"] = best["id"]
+            continue
+        b = best
+        votes = label_votes(b)
+        for k, v in label_votes(o).items():
+            votes[k] = votes.get(k, 0.0) + v
+        b["labels"] = {k: round(v, 2) for k, v in sorted(votes.items(), key=lambda kv: -kv[1])}
+        byframe = {v["frame"]: v for v in b["views"]}
+        for v in o["views"]:
+            if v["frame"] not in byframe:
+                byframe[v["frame"]] = v
+        b["views"] = [byframe[f] for f in sorted(byframe)]
+        b.setdefault("parts", []).append({"id": sid, "label": o["label"], "recall": round(rec, 4),
+                                          "inside": round(best_c, 3), "n_points": o["n_points"]})
+        xyz = np.vstack([pts[b["id"]][0], pts[sid][0]])
+        rgb = np.vstack([pts[b["id"]][1], pts[sid][1]])
+        u = np.unique(np.floor(xyz / 0.02).astype(np.int64), axis=0, return_index=True)[1]
+        pts[b["id"]] = (xyz[u], rgb[u])
+        keys[b["id"]] |= keys[sid]
+        grown.pop(b["id"], None)
+        for q in alive.values():
+            if q.get("on") == sid:
+                q["on"] = b["id"]
+        del alive[sid]
+        absorbed.append((o, b["id"], best_c, rec))
+    left = list(alive.values())
+    os.makedirs(os.path.join(reg, "absorbed"), exist_ok=True)
+    for o, _, _, _ in absorbed:
+        for f in [os.path.join(reg, o["points"])] + glob.glob(os.path.join(reg, "masks", o["id"] + "_*.png")):
+            if os.path.exists(f):
+                os.rename(f, os.path.join(reg, "absorbed", os.path.basename(f)))
+    for o in left:
+        if any(o["id"] == b for _, b, _, _ in absorbed):
+            xyz, rgb = pts[o["id"]]
+            write_ply(os.path.join(reg, o["points"]), xyz, rgb)
+            o["n_points"] = int(len(xyz))
+            o["centroid"] = np.round(xyz.mean(0), 4).tolist()
+            o["aabb_min"] = np.round(xyz.min(0), 4).tolist()
+            o["aabb_max"] = np.round(xyz.max(0), 4).tolist()
+            o["n_views"] = len(o["views"])
+            o["segmented"], o["seen"], r = recall_of(o)
+            o["recall"] = round(r, 4)
+        votes = label_votes(o)
+        total = sum(votes.values())
+        o["label"] = max(votes, key=votes.get)
+        o["agreement"] = round(votes[o["label"]] / total, 3) if total else 1.0
+        o["uncertain"] = o["agreement"] < agree
+    left.sort(key=lambda o: (o["label"], -o["n_points"]))
+    ren = renumber(left)
+    rename_files(reg, left, ren)
+    for o in left:
+        if o.get("on") in ren:
+            o["on"] = ren[o["on"]]
+        elif "on" in o:
+            o.pop("on")
+    doc["objects"] = left
+    json.dump(doc, open(path, "w"), indent=1)
+    json.dump({"part_recall": part_recall, "contain": contain, "part_ratio": part_ratio,
+               "absorbed": [{"id": o["id"], "label": o["label"], "into": ren.get(b, b),
+                             "inside": round(c, 3), "recall": round(r, 4), "n_points": o["n_points"]}
+                            for o, b, c, r in absorbed]},
+              open(os.path.join(reg, "objects_absorbed.json"), "w"), indent=1)
+    log("parts (recall < %.2f, >= %.0f %% inside a %.0fx bigger one): %d objects -> %d, %d absorbed"
+        % (part_recall, 100 * contain, part_ratio, len(objs), len(left), len(absorbed)))
+    into = {}
+    for o, b, _, _ in absorbed:
+        into.setdefault(ren.get(b, b), []).append(o["label"])
+    for b, labs in sorted(into.items(), key=lambda kv: -len(kv[1])):
+        log("  %-22s <- %s" % (b, ", ".join(labs)))
+    unc = [o for o in left if o["uncertain"]]
+    if unc:
+        log("names without a majority (agreement < %.2f):" % agree)
+        for o in unc:
+            log("  %-22s %s" % (o["id"], ", ".join("%s %.0f" % kv for kv in o["labels"].items())))
+    return left, absorbed
+
+
 def on_walls(xyz, room, tol=0.12, share=0.8, extent=1.5):
     """Is a point set the room's shell: most of it within tol of one of the
     room's four walls (room = yaw deg, xmin, xmax, ymin, ymax, as crop_room)
@@ -303,7 +446,11 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__.split("\n\n", 1)[1])
     ap.add_argument("registry")
-    ap.add_argument("step", choices=["merge", "prune"])
+    ap.add_argument("step", choices=["merge", "parts", "prune"])
+    ap.add_argument("--part-recall", type=float, default=0.5)
+    ap.add_argument("--contain", type=float, default=0.6)
+    ap.add_argument("--part-ratio", type=float, default=2.0)
+    ap.add_argument("--agree", type=float, default=0.5)
     ap.add_argument("--overlap", type=float, default=0.5)
     ap.add_argument("--size-ratio", type=float, default=3.0)
     ap.add_argument("--cell", type=float, default=0.05)
@@ -320,6 +467,8 @@ def main(argv=None):
     reg = os.path.expanduser(a.registry)
     if a.step == "merge":
         objs = merge(reg, a.overlap, a.size_ratio, a.cell)
+    elif a.step == "parts":
+        objs, _ = parts(reg, a.part_recall, a.contain, a.part_ratio, a.agree, a.cell)
     else:
         objs, _ = prune(reg, a.min_views, a.min_recall, a.keep_views, a.keep_points, a.room,
                         a.wall_tol, a.wall_share, a.wall_extent)

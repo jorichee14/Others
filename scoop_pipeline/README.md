@@ -183,7 +183,11 @@ assets/              object asset management (the asset report's pipeline), on a
                      views' masks (SAM 3D's input)
   consolidate.py     merge: one object per thing (several labels for one thing -- table /
                      desk, monitor / computer -- merged by shared space and similar size;
-                     a much smaller one inside a bigger one recorded as "on" it); prune
+                     a much smaller one inside a bigger one recorded as "on" it); parts
+                     (after views.py): a smaller object in or touching a bigger one that
+                     SAM 3 finds in under half the frames it is in sight from is a piece of
+                     it, misnamed from some angle: absorbed (its name a vote); the name of
+                     every object by its views' vote, "uncertain" without a majority; prune
                      (after views.py): fragments and false hits out by segmented views and
                      SAM 3's recall on the object (segmented / seen)
   overview.py        the registry to look at: overview.ply (one colour per object) and
