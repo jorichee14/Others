@@ -178,8 +178,11 @@ def write_check(path, scan_map, map_pts, T_lidar, T_cam, radius=7.0):
     write_ply(path, P, C.astype(np.uint8))
 
 
-COLOURS = [(30, 200, 60), (230, 40, 40), (40, 80, 230), (240, 170, 0), (200, 40, 200), (0, 190, 200),
-           (120, 60, 20), (255, 110, 160)]
+def colour(k):
+    """A distinct bright colour per camera: hues a golden-ratio step apart."""
+    import colorsys
+    r, g, b = colorsys.hsv_to_rgb((0.61803398875 * k + 0.05) % 1.0, 0.85, 1.0)
+    return int(255 * r), int(255 * g), int(255 * b)
 
 
 def write_all(path, map_pts, cams, max_map=2000000):
@@ -193,7 +196,7 @@ def write_all(path, map_pts, cams, max_map=2000000):
     g = (110 + 110 * np.clip((z - np.percentile(z, 2)) / max(np.ptp(z), 1e-6), 0, 1)).astype(np.uint8)
     P, C, legend = [m], [np.c_[g, g, g]], []
     for k, (name, Tc, Tl) in enumerate(cams):
-        col = COLOURS[k % len(COLOURS)]
+        col = colour(k)
         ray = Tc[:3, 3] + np.linspace(0, 1.5, 300)[:, None] * Tc[:3, 2]
         parts = [frustum(Tc, 0.5, 0.004), ray] + ([frustum(Tl, 0.3, 0.004)] if Tl is not None else [])
         for q in parts:
