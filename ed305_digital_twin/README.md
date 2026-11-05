@@ -24,6 +24,8 @@ configs/mounts_small.yaml  ASSUMED range: +-15 deg re-aim, nothing slides (the d
 configs/mounts_wide.yaml   ASSUMED range: +-45 deg pan, tilt 15-80, ceiling row turns fully
 extract_frames.py      command line: sample frames from recordings for labelling
 prelabel.py            command line: draft YOLO labels from a pretrained model
+multiview_label.py     command line: person labels from all cameras at once (no hand labels)
+ed305/multiview.py     people from many calibrated views: association, misses, refutation
 make_dataset.py        command line: train / val split (by time or camera), data.yaml
 train_yolo.py          command line: fine-tune YOLO, compare with the pretrained model
 ed305/yolo_data.py     frame sampling, YOLO labels, class matching, the split

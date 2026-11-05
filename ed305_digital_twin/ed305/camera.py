@@ -154,3 +154,33 @@ def load_cameras(path):
         K, w, h, dist = _intrinsics(name, c, defaults)
         cams.append(Camera(str(name), K, w, h, _pose(name, c), dist))
     return cams
+
+
+def load_calibration_json(path, width=1920, height=1080):
+    """The ED305 calibration's results/extrinsics/cameras.json -> list of Camera.
+
+    Per camera (keys "1".."16"): K, dist, R_cw, t_cw (room -> camera, OpenCV),
+    room frame from the floor tags (z up, floor z = 0). The image size is not
+    in the file: width / height (the Basler streams are 1920x1080)."""
+    import json
+    with open(path) as f:
+        doc = json.load(f)
+    cams = []
+    for key, c in doc["cameras"].items():
+        name = key if str(key).startswith("cam") else f"cam_{int(key)}"
+        d = np.asarray(c.get("dist", []), float).ravel()
+        if d.size > 5:
+            raise ValueError(f"{name}: {d.size} distortion coefficients; only k1 k2 p1 p2 k3 is supported")
+        dist = np.zeros(5)
+        dist[:d.size] = d
+        R, t = np.asarray(c["R_cw"], float), np.asarray(c["t_cw"], float).reshape(3)
+        T = np.eye(4)
+        T[:3, :3], T[:3, 3] = R.T, -R.T @ t
+        cams.append(Camera(name, np.asarray(c["K"], float).reshape(3, 3), int(c.get("img_w", width)),
+                           int(c.get("img_h", height)), T, dist))
+    return cams
+
+
+def load_any(path, width=1920, height=1080):
+    """cameras YAML (this repo) or the calibration's cameras.json."""
+    return load_calibration_json(path, width, height) if str(path).endswith(".json") else load_cameras(path)
