@@ -123,6 +123,21 @@ Repeat RTAB-Map at least 3 times: it is not reproducible run to run.
 Scoring against the reference is `check.py trajs` with `trajectory.tum`; for
 Swarm-SLAM, `datasets/swarm_slam_lidar.py --odom-tum <machine> trajectory.tum <tum_frame>`.
 
+## Every method's trajectory in one video
+
+```bash
+python scoop_pipeline/slam/odometry/traj_video.py $R/fast2lamaa_mobile_2 $R/fast2lamaa_loc_mobile_2 \
+    $R/fast_lio_mobile_2 $R/rko_lio_mobile_2 $R/kiss_icp_mobile_2 --out $R/trajectories_mobile_2.mp4 \
+    [--map <the map, in the reference's frame>] [--align fit|start|none] [--speed 10]
+```
+
+The runs are drawn as they unfold over the pass, each placed on the reference
+the way `score.py` scores it (`fit`: the ATE's rigid fit; a run in the map,
+2Fast-2Lamaa's localizer, as it is), with each method's position error over
+time beside the plan and its score from `accuracy.json` in the legend.
+`--align start` shows drift building up from a common start instead. `--map`
+draws the map as a grey floor plan under the paths.
+
 ## Scoring a run again
 
 ```bash
