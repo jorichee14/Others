@@ -6,6 +6,7 @@ perception made visible.
     python3 scripts/coop_camera_movie.py --root <split> --out coop_cameras.mp4
         [--start 30] [--seconds 40] [--speed 0.5] [--cloud mapping/cloud_in_ref_<tag>.pcd]
         [--names mobile_1,mobile_2] [--max-range 6] [--hold 1.5] [--theme light]
+    python3 scripts/coop_camera_movie.py --root <split> --scan --seconds 9999   # where the hand-overs are
 
 Every frame, each labelled object near either robot (--max-range) is sorted by
 whose own LiDAR sweep actually has returns inside it (bev_movie.seen_by, the
@@ -111,6 +112,8 @@ def main() -> int:
     ap.add_argument("--theme", choices=sorted(BM.THEMES), default="light")
     ap.add_argument("--title", default="Cooperative perception: what each robot sees, and what the other hands it")
     ap.add_argument("--size", default="1920x1080")
+    ap.add_argument("--scan", action="store_true",
+                    help="list, once a second, where one robot hands objects to the other; no video")
     a = ap.parse_args()
 
     theme = BM.THEMES[a.theme]
@@ -159,6 +162,22 @@ def main() -> int:
     def who_sees(frame):
         close = near(frame)
         return {x: BM.seen_by(returns_of(x, frame), boxes, a.min_points) & close for x in agents}
+
+    if a.scan:
+        step = max(1, int(round(a.rate)))
+        print("   t (s)   " + "   ".join(f"{name[x]} receives" for x in agents))
+        busy = []
+        for frame in range(first, last + 1, step):
+            sees = who_sees(frame)
+            got = {x: sees[other[x]] - sees[x] for x in agents}
+            if any(got.values()):
+                busy.append(frame / a.rate)
+                print(f"{frame / a.rate:8.1f}   " + "   ".join(
+                    f"{len(got[x]):3d} ({', '.join(sorted(class_name(boxes[k]) for k in got[x]))})" for x in agents))
+        if busy:
+            print(f"hand-overs at {len(busy)} of {len(range(first, last + 1, step))} sampled seconds; "
+                  f"pick --start a few seconds before a run of them")
+        return 0
 
     # ------------------------------------------------------------------ figure
     W, H = (int(v) for v in a.size.lower().split("x"))
