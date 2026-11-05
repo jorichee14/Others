@@ -75,6 +75,7 @@ def load_run(run, ref=None, align="fit", use_bag=False):
     else:                          # as the method reported it: its frame, a fixed lever arm from the LiDAR
         T_fl = np.eye(4)
     t, T = SC.load_traj(tum)
+    t_raw0 = float(t[0])
     E = np.einsum("nij,jk->nik", T, T_fl)
     tr, Tr = SC.load_traj(ref)
     lo, hi = max(t[0], tr[0]), min(t[-1], tr[-1])
@@ -107,7 +108,10 @@ def load_run(run, ref=None, align="fit", use_bag=False):
             score_txt = f"{kind} {v:.1f} cm"
     return {"run": run, "method": rj.get("method", os.path.basename(run.rstrip("/"))),
             "machine": rj.get("machine", ""), "ref": ref, "t": t, "P": P, "err": err,
-            "how": how, "score": score_txt, "kind": kind, "val": val}
+            "how": how, "score": score_txt, "kind": kind, "val": val,
+            "frame": rj.get("tum_frame", "?"), "late_s": t_raw0 - float(tr[0]),
+            "start_err": float(err[0]), "median_err": float(np.median(err)),
+            "start_gap": float(np.linalg.norm(R[0, :3, 3] - SC.trajs.interp(tr, Tr, np.array([tr[0]]))[0, :3, 3]))}
 
 
 def floor_plan(path, bounds, cell=0.1):
@@ -134,7 +138,10 @@ def video_writer(out, fps, size):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("runs", nargs="+", help="run folders (run.json + trajectory.tum)")
-    ap.add_argument("--out", required=True, help="the video (.mp4)")
+    ap.add_argument("--out", default=None, help="the video (.mp4)")
+    ap.add_argument("--info", action="store_true",
+                    help="print, per run, when it starts against the reference and how far its first pose is "
+                         "from it after placement; no video")
     ap.add_argument("--ref", default=None, help="reference TUM for every run (default: each run's stage 04 reference)")
     ap.add_argument("--map", default=None, help="a cloud or mesh in the reference's frame, drawn as the floor plan")
     ap.add_argument("--align", choices=["fit", "start", "none"], default="fit")
@@ -155,6 +162,15 @@ def main():
                          "font.size": 13, "axes.linewidth": 0.6})
 
     runs = [load_run(r, a.ref, a.align, a.use_bag) for r in a.runs]
+    if a.info:
+        print(f"{'run':38s} {'frame':>12s} {'starts after ref':>17s} {'robot moved by then':>20s} "
+              f"{'error at its start':>19s} {'median error':>13s}  placement")
+        for r in runs:
+            print(f"{os.path.basename(r['run'].rstrip('/')):38s} {r['frame']:>12s} {r['late_s']:15.1f} s "
+                  f"{r['start_gap']:18.2f} m {r['start_err']:17.2f} m {r['median_err']:11.2f} m  {r['how']}")
+        return
+    if not a.out:
+        raise SystemExit("give --out (or --info)")
     labels = [s.strip() for s in a.labels.split(",")] if a.labels else []
     # colour = the method (the same across robots), line style = the robot
     methods = list(dict.fromkeys(r["method"] for r in runs))
