@@ -90,6 +90,17 @@ def test_frustum_and_tq():
     assert np.linalg.norm(F - [1, 2, 3], axis=1).max() < 0.5
 
 
+def test_find_bag(d):
+    for name in ("ed305_calib_1", "ed305_calib_11", "ed305_dataset_calibration_cam10", "ed305_extrinsics_20261105"):
+        os.makedirs(os.path.join(d, name))
+        open(os.path.join(d, name, "metadata.yaml"), "w").write("x")
+    b = lambda n: [os.path.basename(x) for x in pc.find_bag(d, n)]       # noqa: E731
+    assert b(1) == ["ed305_calib_1"], b(1)
+    assert b(11) == ["ed305_calib_11"], b(11)
+    assert b(10) == ["ed305_dataset_calibration_cam10"], b(10)
+    assert b(2) == [], b(2)
+
+
 def check(name, fn, *args):
     try:
         fn(*args)

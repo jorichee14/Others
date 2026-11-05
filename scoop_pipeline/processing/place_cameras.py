@@ -3,7 +3,7 @@
 robot's colour camera, with the robot placed by its own LiDAR: no trajectory,
 the robot standing still during each calibration.
 
-    python3 scoop_pipeline/processing/place_cameras.py <calibration folder> <out folder>
+    python3 scoop_pipeline/processing/place_cameras.py <calibration folder> [<more> ...] <out folder>
         --map <anchored map .pcd/.ply> --traj <the mapping pass's camera TUM, map frame>
         [--extrinsics <folder>] [--seconds 5] [--topic auto] [--min-range 1.0]
         [--static-tf configs/static_tf.yaml] [--lidar-frame os_lidar_mobile2]
@@ -19,13 +19,15 @@ the robot standing still during each calibration.
     T_map_camN = T_map_lidar . T_lidar_colour . T_colour_camN
 
   T_colour_camN   the calibration: <extrinsics>/extrinsic_<a>__cam_N.yaml with
-                  stage: locked and parent_frame --camera-frame (default
-                  <calibration folder>/ed305_extrinsics);
+                  stage: locked and parent_frame --camera-frame (default:
+                  the one folder named *extrinsics* in each calibration
+                  folder). Several calibration folders, oldest first: a
+                  camera calibrated in more than one is taken from the last;
   T_lidar_colour  the robot's LiDAR -> colour camera calibration (--static-tf,
                   --lidar-frame -> --camera-frame);
   T_map_lidar     where the robot stood: the calibration bag of cam_N (the
                   folder under <calibration folder> whose name ends in
-                  cam<N> or cam_<N>), its first --seconds of LiDAR points (the
+                  cam<N>, cam_<N> or calib_<N>), its first --seconds of LiDAR points (the
                   robot still: one sharp cloud), in the LiDAR frame (an
                   os_sensor cloud moved to os_lidar by the bag's /tf_static),
                   levelled by the LiDAR's mean tilt in the mapping pass (the
@@ -128,7 +130,8 @@ def frustum(T, size=0.3, step=0.005):
 
 
 def find_bag(folder, n):
-    pat = re.compile(r"cam_?0*%d$" % n)
+    """Bag folders of camera n: named ...cam<n>, ...cam_<n>, ...calib_<n> (zeros in front allowed)."""
+    pat = re.compile(r"(?:cam|calib)_?0*%d$" % n)
     hits = [d for d in sorted(glob.glob(os.path.join(folder, "*"))) if os.path.isdir(d) and pat.search(os.path.basename(d))]
     bags = []
     for d in hits:                     # the folder itself, or a bag folder inside it
@@ -232,8 +235,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__.split("\n\n", 1)[1])
-    ap.add_argument("calibration")
-    ap.add_argument("out")
+    ap.add_argument("calibration", nargs="+", help="calibration folder(s), oldest first; then the out folder")
     ap.add_argument("--map", required=True)
     ap.add_argument("--traj", required=True)
     ap.add_argument("--extrinsics", default=None)
@@ -246,8 +248,12 @@ def main(argv=None):
     a = ap.parse_args(argv)
     import open3d as o3d
     from scoop import tftree
-    cal = os.path.expanduser(a.calibration)
-    ext_dir = os.path.expanduser(a.extrinsics or os.path.join(cal, "ed305_extrinsics"))
+    if len(a.calibration) < 2:
+        ap.error("give the calibration folder(s) and then the out folder")
+    a.out = a.calibration[-1]
+    cal_dirs = [os.path.expanduser(c) for c in a.calibration[:-1]]
+    if a.extrinsics and len(cal_dirs) > 1:
+        ap.error("--extrinsics with one calibration folder only (each finds its own *extrinsics* folder)")
     out = os.path.expanduser(a.out)
     os.makedirs(out, exist_ok=True)
     cals = tftree.load_calibrations(yaml.safe_load(open(os.path.expanduser(a.static_tf))))
@@ -259,22 +265,35 @@ def main(argv=None):
     print("LiDAR tilt in the mapping pass: pitch %.2f deg, roll %.2f deg (spread %.2f deg)" % (pitch, roll, spread))
     map_pts = np.asarray(o3d.io.read_point_cloud(os.path.expanduser(a.map)).points)
     print("map: %d points" % len(map_pts))
-    exts = []
-    for f in sorted(glob.glob(os.path.join(ext_dir, "extrinsic_*__cam_*.yaml"))):
-        if f.endswith("_prev.yaml"):
-            continue
-        e = yaml.safe_load(open(f))
-        if e.get("stage") != "locked":
-            print("  %s: stage %s, not locked: left out" % (os.path.basename(f), e.get("stage")))
-            continue
-        if e.get("parent_frame") != a.camera_frame:
-            print("  %s: parent %s, not %s: left out" % (os.path.basename(f), e.get("parent_frame"), a.camera_frame))
-            continue
-        exts.append((f, e))
+    found = {}                                    # child -> (file, doc, calibration folder): the latest folder wins
+    for cal in cal_dirs:
+        if a.extrinsics:
+            ext_dir = os.path.expanduser(a.extrinsics)
+        else:
+            cand = [d for d in sorted(glob.glob(os.path.join(cal, "*extrinsics*"))) if os.path.isdir(d)]
+            if len(cand) != 1:
+                raise SystemExit("%s: which extrinsics folder? %s (--extrinsics)" % (cal, cand or "none"))
+            ext_dir = cand[0]
+        print("%s: extrinsics in %s" % (cal, os.path.basename(ext_dir)))
+        for f in sorted(glob.glob(os.path.join(ext_dir, "extrinsic_*__cam_*.yaml"))):
+            if f.endswith("_prev.yaml"):
+                continue
+            e = yaml.safe_load(open(f))
+            if e.get("stage") != "locked":
+                print("  %s: stage %s, not locked: left out" % (os.path.basename(f), e.get("stage")))
+                continue
+            if e.get("parent_frame") != a.camera_frame:
+                print("  %s: parent %s, not %s: left out" % (os.path.basename(f), e.get("parent_frame"), a.camera_frame))
+                continue
+            if e["child_frame"] in found:
+                print("  %s: replaces the one in %s" % (e["child_frame"], found[e["child_frame"]][2]))
+            found[e["child_frame"]] = (f, e, cal)
+    exts = sorted(found.values(), key=lambda x: int(re.search(r"(\d+)$", x[1]["child_frame"]).group(1)))
     if not exts:
-        raise SystemExit("no locked extrinsic to %s in %s" % (a.camera_frame, ext_dir))
+        raise SystemExit("no locked extrinsic to %s" % a.camera_frame)
+    print("cameras: %s" % ", ".join(x[1]["child_frame"] for x in exts))
     rows, transforms = [], []
-    for f, e in exts:
+    for f, e, cal in exts:
         child = e["child_frame"]
         n = int(re.search(r"(\d+)$", child).group(1))
         print("\n%s (%s, %d placements, spread %.2f mm / %.3f deg)"
@@ -311,7 +330,7 @@ def main(argv=None):
         write_check(os.path.join(out, "check_%s.ply" % child), scan_map, map_pts, T_map_col, T_map_cam)
         quality = {"robot_fit": round(fit, 4), "robot_rmse_m": round(rmse, 4), "trusted": ok,
                    "rival": riv, "scans": nscan, "bag": os.path.basename(bags[0]), "topic": topic,
-                   "extrinsic": os.path.basename(f), "extrinsic_spread_mm": e.get("spread_mm"),
+                   "extrinsic": os.path.basename(f), "calibration": cal, "extrinsic_spread_mm": e.get("spread_mm"),
                    "extrinsic_spread_deg": e.get("spread_deg"), "placements": e.get("placements")}
         transforms.append({"parent": "map", "child": child, "translation": t, "rotation_xyzw": q,
                            "quality": quality})
