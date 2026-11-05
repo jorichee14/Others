@@ -100,6 +100,37 @@ def test_reaim(d):
         assert os.path.isfile(os.path.join(out, f)), f
 
 
+CAM13 = {"camera": 13, "session": 2, "image_size": [1920, 1080],
+         "K": [[1703.66, 0.0, 932.97], [0.0, 1704.64, 521.99], [0.0, 0.0, 1.0]],
+         "dist": [-0.4493, 0.2807, -0.0006, 0.0004, -0.1187]}
+
+
+def test_intrinsics_and_lens(d):
+    import cv2
+    old = dict(CAM13, session=1, K=[[1500.0, 0, 960], [0, 1500.0, 540], [0, 0, 1]])
+    json.dump(old, open(os.path.join(d, "cam_13_1.json"), "w"))
+    json.dump(CAM13, open(os.path.join(d, "cam_13_2.json"), "w"))
+    t = cc.load_intrinsics(d)
+    k = t["cam_13"][0]
+    assert abs(k["fx"] - 1703.66) < 1e-6, k                            # the latest session
+    h, v = cc.fov_deg(k)
+    assert 66 < h < 69 and 35.5 < v < 38, (h, v)                       # wider than the pinhole's 58.8 x 35.2
+    # the projection with the lens agrees with OpenCV's
+    rng = np.random.default_rng(0)
+    P = np.c_[rng.uniform(-1.2, 1.2, 300), rng.uniform(-0.6, 0.6, 300), rng.uniform(2, 6, 300)]
+    T = P[:, None, :]
+    R = np.eye(3)
+    seen = cc.seen_by_aims(T, np.ones((300, 1), bool), np.zeros(3), [R], k, 0, 0, 1)[0]
+    K = np.array(CAM13["K"])
+    uv = cv2.projectPoints(P, np.zeros(3), np.zeros(3), K, np.array(CAM13["dist"]))[0].reshape(-1, 2)
+    x, y = P[:, 0] / P[:, 2], P[:, 1] / P[:, 2]
+    inside = (uv[:, 0] >= 0) & (uv[:, 0] < 1920) & (uv[:, 1] >= 0) & (uv[:, 1] < 1080) & (x * x + y * y <= k["r_max"] ** 2)
+    assert (seen == inside).mean() > 0.99, (seen.sum(), inside.sum())
+    # far outside the view the polynomial folds back: not counted
+    far = np.array([[3.0, 0.0, 1.0]])
+    assert not cc.seen_by_aims(far[:, None, :], np.ones((1, 1), bool), np.zeros(3), [R], k, 0, 0, 1)[0, 0]
+
+
 def check(name, fn, *args):
     try:
         fn(*args)

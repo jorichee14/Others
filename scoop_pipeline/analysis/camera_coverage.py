@@ -4,7 +4,8 @@ each camera keeps its place, only its pan and tilt change.
 
     python3 scoop_pipeline/analysis/camera_coverage.py <cameras.yaml> <out dir>
         --map <room map .ply/.pcd> --mesh <room mesh .ply> --room YAW XMIN XMAX YMIN YMAX
-        [--intrinsics <yaml/json>] [--hfov 90] [--vfov 60] [--size 1280x720]
+        [--intrinsics <file or folder>] [--intrinsics-all <one camera's file>]
+        [--hfov 90] [--vfov 60] [--size 1280x720]
         [--cell 0.15] [--heights 0.2,1.0,1.6] [--min-heights 2] [--all-floor]
         [--max-range 10] [--min-ppm 50] [--margin 0.02]
         [--pan-step 5] [--tilt 5,85,5] [--max-change 0] [--restarts 20]
@@ -24,8 +25,14 @@ crop_room.py gives it, 0.1 m in from the walls). Free floor only (no map
 point 0.15..1.8 m over it: furniture, counters), unless --all-floor. Each
 cell a person-high column: points at --heights over the floor.
 
-Seen. Camera c with aim a sees a point when: it is in the image (the
-camera's intrinsics, --margin of the size in from the edges), in front,
+Intrinsics. Per camera from --intrinsics (the ED305 intrinsics json:
+K, image_size, dist k1 k2 p1 p2 k3; a ROS camera_info yaml; a folder of
+cam_<N>_<session>.json, the latest session each), else --intrinsics-all's
+(one camera's, for all), else a distortion-free --hfov x --vfov at --size.
+The lens distortion counts: a barrel lens sees wider than its fx says.
+
+Seen. Camera c with aim a sees a point when: it is in the image (projected
+through the lens, --margin of the size in from the edges), in front,
 within --max-range, at --min-ppm pixels per metre or more (fx / depth), and
 nothing of --mesh lies between (a ray from the point to the camera: the
 camera may sit in the wall or ceiling it hangs on by up to 0.25 m). A cell is
@@ -102,20 +109,101 @@ def axis_angle(Ra, Rb):
 
 
 # ---------------------------------------------------------------- intrinsics
-def intrinsics_for(name, table, hfov, vfov, size):
-    """(W, H, fx, fy, cx, cy): from the table (ROS camera_info yaml shape or
-    flat), else from the fields of view."""
-    e = (table or {}).get(name)
-    if e:
-        if "camera_matrix" in e:
-            k = e["camera_matrix"]["data"]
-            return int(e["image_width"]), int(e["image_height"]), k[0], k[4], k[2], k[5]
-        if "K" in e or "k" in e:
-            k = e.get("K") or e.get("k")
-            return int(e.get("width") or e["image_width"]), int(e.get("height") or e["image_height"]), k[0], k[4], k[2], k[5]
-        return int(e["width"]), int(e["height"]), e["fx"], e["fy"], e["cx"], e["cy"]
+def parse_intrinsics(e):
+    """dict W H fx fy cx cy D (and r_max) from one camera's calibration: the
+    ED305 intrinsics json (K / camera_matrix, image_size / img_w img_h, dist /
+    dist_coeffs / distortion), a ROS camera_info yaml, or a flat fx fy cx cy."""
+    import re as _re
+    if "camera_matrix" in e and isinstance(e["camera_matrix"], dict):          # ROS camera_info yaml
+        k = e["camera_matrix"]["data"]
+        K = np.array(k, float).reshape(3, 3)
+        W, H = int(e["image_width"]), int(e["image_height"])
+        D = (e.get("distortion_coefficients") or {}).get("data") or []
+    elif "K" in e or "camera_matrix" in e or "k" in e:
+        K = np.array(e.get("K") or e.get("camera_matrix") or e.get("k"), float).reshape(3, 3)
+        if "image_size" in e:
+            W, H = (int(v) for v in e["image_size"])
+        else:
+            W = int(e.get("img_w") or e.get("width") or e.get("image_width"))
+            H = int(e.get("img_h") or e.get("height") or e.get("image_height"))
+        D = e.get("dist") or e.get("dist_coeffs") or e.get("distortion") or e.get("D") or e.get("d") or []
+    else:
+        K = np.array([[e["fx"], 0, e["cx"]], [0, e["fy"], e["cy"]], [0, 0, 1.0]])
+        W, H = int(e["width"]), int(e["height"])
+        D = e.get("dist") or e.get("distortion") or []
+    out = {"W": W, "H": H, "fx": float(K[0, 0]), "fy": float(K[1, 1]), "cx": float(K[0, 2]),
+           "cy": float(K[1, 2]), "D": np.array(D, float).ravel()[:5]}
+    out["r_max"] = edge_radius(out)
+    return out
+
+
+def edge_radius(k):
+    """The largest normalised radius the image reaches (its edges undistorted),
+    a little over: past it a distortion polynomial can fold back into view."""
+    import cv2
+    W, H = k["W"], k["H"]
+    e = np.r_[np.c_[np.linspace(0, W - 1, 50), np.zeros(50)], np.c_[np.linspace(0, W - 1, 50), np.full(50, H - 1)],
+              np.c_[np.zeros(50), np.linspace(0, H - 1, 50)], np.c_[np.full(50, W - 1), np.linspace(0, H - 1, 50)]]
+    K = np.array([[k["fx"], 0, k["cx"]], [0, k["fy"], k["cy"]], [0, 0, 1.0]])
+    D = k["D"] if len(k["D"]) else np.zeros(5)
+    u = cv2.undistortPoints(e.reshape(-1, 1, 2).astype(np.float64), K, D).reshape(-1, 2)
+    return float(np.linalg.norm(u, axis=1).max() * 1.05)
+
+
+def fov_deg(k):
+    """(horizontal, vertical) field of view, distortion included."""
+    import cv2
+    K = np.array([[k["fx"], 0, k["cx"]], [0, k["fy"], k["cy"]], [0, 0, 1.0]])
+    D = k["D"] if len(k["D"]) else np.zeros(5)
+    p = np.array([[0, k["cy"]], [k["W"] - 1, k["cy"]], [k["cx"], 0], [k["cx"], k["H"] - 1]], np.float64)
+    u = cv2.undistortPoints(p.reshape(-1, 1, 2), K, D).reshape(-1, 2)
+    return (float(np.degrees(np.arctan(-u[0, 0]) + np.arctan(u[1, 0]))),
+            float(np.degrees(np.arctan(-u[2, 1]) + np.arctan(u[3, 1]))))
+
+
+def load_intrinsics(path):
+    """{camera name: intrinsics} from a file (one camera's, or a table of
+    them) or a folder of files (cam_<N>[_<session>].json / .yaml; the
+    latest session of each camera)."""
+    import glob
+    import re as _re
+    path = os.path.expanduser(path)
+    read = lambda f: json.load(open(f)) if f.endswith(".json") else yaml.safe_load(open(f))   # noqa: E731
+    files = sorted(glob.glob(os.path.join(path, "*.json")) + glob.glob(os.path.join(path, "*.y*ml"))) \
+        if os.path.isdir(path) else [path]
+    best = {}
+    for f in files:
+        try:
+            e = read(f)
+        except Exception:
+            continue
+        if not isinstance(e, dict):
+            continue
+        one = any(k in e for k in ("K", "camera_matrix", "k", "fx"))
+        if not one:                                                    # a table: name -> calibration
+            for name, v in e.items():
+                if isinstance(v, dict):
+                    best[str(name)] = (0, parse_intrinsics(v), f)
+            continue
+        m = _re.search(r"cam_?(\d+)(?:_(\d+))?", os.path.basename(f))
+        cid = e.get("camera_id", e.get("camera"))
+        if cid is None and m:
+            cid = int(m.group(1))
+        if cid is None:
+            continue
+        session = e.get("session", int(m.group(2)) if m and m.group(2) else 0)
+        name = "cam_%d" % int(cid)
+        if name not in best or session >= best[name][0]:
+            best[name] = (session, parse_intrinsics(e), f)
+    return {k: (v[1], v[2]) for k, v in best.items()}
+
+
+def pinhole(hfov, vfov, size):
     W, H = size
-    return W, H, (W / 2) / np.tan(np.radians(hfov) / 2), (H / 2) / np.tan(np.radians(vfov) / 2), W / 2 - 0.5, H / 2 - 0.5
+    k = {"W": W, "H": H, "fx": (W / 2) / np.tan(np.radians(hfov) / 2), "fy": (H / 2) / np.tan(np.radians(vfov) / 2),
+         "cx": W / 2 - 0.5, "cy": H / 2 - 0.5, "D": np.zeros(0)}
+    k["r_max"] = edge_radius(k)
+    return k
 
 
 # ---------------------------------------------------------------- floor
@@ -179,8 +267,11 @@ def unoccluded(scene, T, o, max_range, slack=0.25):
 
 
 def seen_by_aims(T, clear, o, Rs, K, min_ppm, margin, min_heights, chunk=128):
-    """(n_aims, n_cells) bool: cell seen by the camera at o with each aim."""
-    W, H, fx, fy, cx, cy = K
+    """(n_aims, n_cells) bool: cell seen by the camera at o with each aim;
+    K: parse_intrinsics' dict (lens distortion applied)."""
+    W, H, fx, fy, cx, cy = K["W"], K["H"], K["fx"], K["fy"], K["cx"], K["cy"]
+    D = np.r_[K["D"], np.zeros(5)][:5]
+    k1, k2, p1, p2, k3 = D
     n, k, _ = T.shape
     V = (T - o).reshape(-1, 3)
     ok = clear.reshape(-1)
@@ -191,9 +282,16 @@ def seen_by_aims(T, clear, o, Rs, K, min_ppm, margin, min_heights, chunk=128):
         C = np.einsum("nj,ajk->ank", V, R)                            # map -> camera: V @ R
         z = C[..., 2]
         with np.errstate(divide="ignore", invalid="ignore"):
-            u = fx * C[..., 0] / z + cx
-            v = fy * C[..., 1] / z + cy
-            vis = (z > 0.1) & (u >= mu) & (u < W - mu) & (v >= mv) & (v < H - mv) & (fx / z >= min_ppm) & ok[None]
+            x, y = C[..., 0] / z, C[..., 1] / z
+            r2 = x * x + y * y
+            g = 1 + k1 * r2 + k2 * r2 ** 2 + k3 * r2 ** 3
+            xd = x * g + 2 * p1 * x * y + p2 * (r2 + 2 * x * x)
+            yd = y * g + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y
+            u = fx * xd + cx
+            v = fy * yd + cy
+            ppm = fx * g / z                                          # local scale at the point
+            vis = ((z > 0.1) & (r2 <= K["r_max"] ** 2) & (u >= mu) & (u < W - mu) & (v >= mv) & (v < H - mv)
+                   & (ppm >= min_ppm) & ok[None])
         out[s:s + chunk] = vis.reshape(len(R), n, k).sum(2) >= min_heights
     return out
 
@@ -328,7 +426,8 @@ def main(argv=None):
     ap.add_argument("--map", required=True)
     ap.add_argument("--mesh", required=True)
     ap.add_argument("--room", type=float, nargs=5, required=True, metavar=("YAW", "XMIN", "XMAX", "YMIN", "YMAX"))
-    ap.add_argument("--intrinsics", default=None)
+    ap.add_argument("--intrinsics", default=None, help="a calibration file, a table of them, or a folder")
+    ap.add_argument("--intrinsics-all", default=None, help="one camera's calibration for every camera without its own")
     ap.add_argument("--hfov", type=float, default=90.0)
     ap.add_argument("--vfov", type=float, default=60.0)
     ap.add_argument("--size", default="1280x720")
@@ -352,16 +451,24 @@ def main(argv=None):
     os.makedirs(out, exist_ok=True)
     doc = yaml.safe_load(open(os.path.expanduser(a.cameras)))
     cams = [(t["child"], T_of(t["translation"], t["rotation_xyzw"])) for t in doc["transforms"]]
-    table = None
-    if a.intrinsics:
-        p = os.path.expanduser(a.intrinsics)
-        table = json.load(open(p)) if p.endswith(".json") else yaml.safe_load(open(p))
     size = tuple(int(v) for v in a.size.split("x"))
-    Ks = {name: intrinsics_for(name, table, a.hfov, a.vfov, size) for name, _ in cams}
-    gen = [name for name in Ks if not (table or {}).get(name)]
-    if gen:
-        print("intrinsics from --hfov %.0f / --vfov %.0f at %dx%d for: %s"
-              % (a.hfov, a.vfov, size[0], size[1], ", ".join(gen)))
+    table = load_intrinsics(a.intrinsics) if a.intrinsics else {}
+    fallback = None
+    if a.intrinsics_all:
+        f = load_intrinsics(a.intrinsics_all)
+        if len(f) != 1:
+            raise SystemExit("--intrinsics-all: one camera's calibration expected, %d found" % len(f))
+        fallback = list(f.values())[0]
+    Ks = {}
+    for name, _ in cams:
+        if name in table:
+            Ks[name], src = table[name][0], os.path.basename(table[name][1])
+        elif fallback is not None:
+            Ks[name], src = fallback[0], "%s (--intrinsics-all)" % os.path.basename(fallback[1])
+        else:
+            Ks[name], src = pinhole(a.hfov, a.vfov, size), "--hfov %.0f / --vfov %.0f, no distortion" % (a.hfov, a.vfov)
+        h, v = fov_deg(Ks[name])
+        print("  %-7s %dx%d, field of view %.1f x %.1f deg  (%s)" % (name, Ks[name]["W"], Ks[name]["H"], h, v, src))
     P = np.asarray(o3d.io.read_point_cloud(os.path.expanduser(a.map)).points)
     abc = floor_plane(P)
     print("floor: z = %.3f %+.4f x %+.4f y (tilt %.2f deg)" % (abc[0], abc[1], abc[2],
