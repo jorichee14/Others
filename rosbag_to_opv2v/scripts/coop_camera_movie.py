@@ -7,6 +7,7 @@ perception made visible.
         [--start 30] [--seconds 40] [--speed 0.5] [--cloud mapping/cloud_in_ref_<tag>.pcd]
         [--names mobile_1,mobile_2] [--max-range 6] [--hold 1.5] [--theme light]
     python3 scripts/coop_camera_movie.py --root <split> --scan --seconds 9999   # where the hand-overs are
+    python3 scripts/coop_camera_movie.py --root <split> --auto --seconds 30     # the busiest 30 s, rendered
 
 Every frame, each labelled object near either robot (--max-range) is sorted by
 whose own LiDAR sweep actually has returns inside it (bev_movie.seen_by, the
@@ -112,6 +113,8 @@ def main() -> int:
     ap.add_argument("--theme", choices=sorted(BM.THEMES), default="light")
     ap.add_argument("--title", default="Cooperative perception: what each robot sees, and what the other hands it")
     ap.add_argument("--size", default="1920x1080")
+    ap.add_argument("--auto", action="store_true",
+                    help="find the --seconds stretch with the most hand-overs and render that one")
     ap.add_argument("--scan", action="store_true",
                     help="list, once a second, where one robot hands objects to the other; no video")
     a = ap.parse_args()
@@ -162,6 +165,26 @@ def main() -> int:
     def who_sees(frame):
         close = near(frame)
         return {x: BM.seen_by(returns_of(x, frame), boxes, a.min_points) & close for x in agents}
+
+    if a.auto:
+        # one look a second over the whole recording, then the window with the most hand-overs
+        step = max(1, int(round(a.rate)))
+        samples = list(range(0, n_frames, step))
+        count = []
+        for frame in samples:
+            sees = who_sees(frame)
+            count.append(sum(len(sees[other[x]] - sees[x]) for x in agents))
+        span = max(1, int(round(a.seconds)))
+        sums = [sum(count[i:i + span]) for i in range(max(1, len(count) - span + 1))]
+        best = int(np.argmax(sums))
+        if sums[best] == 0:
+            print("no hand-overs anywhere in the recording (check --names, --max-range, --min-points)",
+                  file=sys.stderr)
+            return 2
+        first = max(0, samples[best] - 3 * step)           # a few seconds of lead-in
+        last = min(n_frames - 1, first + int(round(a.seconds * a.rate)))
+        print(f"busiest {span} s: from {first / a.rate:.1f} s ({sums[best]} object-hand-overs counted once a second)",
+              flush=True)
 
     if a.scan:
         step = max(1, int(round(a.rate)))
