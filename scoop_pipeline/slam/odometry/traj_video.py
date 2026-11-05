@@ -5,9 +5,12 @@
         [--map <cloud or mesh, the reference's frame>] [--ref TUM] [--align fit|start|none]
         [--speed 10] [--fps 30] [--size 1920x1080] [--labels "2Fast-2Lamaa,FAST-LIO2,..."]
 
-Each run is a folder run_odometry.sh wrote (run.json + trajectory.tum). Every
-estimate is put in the LiDAR frame and on the reference exactly as score.py
-scores it, so the picture shows what accuracy.json measured:
+Each run is a folder run_odometry.sh wrote (run.json + trajectory.tum). Only the
+trajectories are read: the reference is the one score.py recorded in the run's
+accuracy.json, and each estimate is drawn in the frame its method reported
+(FAST-LIO2's IMU, a camera for RTAB-Map: a fixed lever arm of a few cm to tens
+of cm from the LiDAR). --use-bag reads the bag's /tf_static to put every estimate
+in the LiDAR frame first, exactly as score.py scores it. Placement on the reference:
 
   fit    (default) the best rigid fit of the estimate's poses onto the reference
          (score.py's ATE); a run localized in the map (run.json "world": "map",
@@ -42,17 +45,35 @@ NAMES = {"fast2lamaa": "2Fast-2Lamaa", "fast2lamaa_loc": "2Fast-2Lamaa (in map)"
 COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 
 
-def load_run(run, ref=None, align="fit"):
+def reference_of(run, rj, ref, use_bag):
+    """The reference TUM: --ref, else the run's own record of it (run.json, then the one
+    score.py used, in accuracy.json), else stage 04's found from the bag (use_bag only)."""
+    cands = [ref, rj.get("ref")]
+    acc = os.path.join(run, "accuracy.json")
+    if os.path.exists(acc):
+        cands.append(json.load(open(acc)).get("reference"))
+    for c in cands:
+        if c:
+            for p in (c, os.path.join(os.getcwd(), c), os.path.join(run, c)):
+                if os.path.exists(p):
+                    return p
+    if use_bag:
+        return SC.default_ref(rj["bag"], rj["machine"])
+    raise SystemExit(f"{run}: no reference recorded in run.json or accuracy.json (give --ref)")
+
+
+def load_run(run, ref=None, align="fit", use_bag=False):
     """One run, on the reference: times, plan positions, error to the reference (m), label facts."""
     rj = json.load(open(os.path.join(run, "run.json")))
     tum = os.path.join(run, "trajectory.tum")
     if not os.path.exists(tum) or os.path.getsize(tum) == 0:
         raise SystemExit(f"{run}: no trajectory.tum")
-    ref = ref or rj.get("ref") or SC.default_ref(rj["bag"], rj["machine"])
-    if not ref or not os.path.exists(ref):
-        raise SystemExit(f"{run}: no reference at {ref} (give --ref)")
-    paths = SC.MK.mc._paths(rj["bag"])
-    T_fl, _ = SC.MK.to_lidar(paths, SC.MK.mc.build_tf_static(paths), rj["machine"], rj["tum_frame"])
+    ref = reference_of(run, rj, ref, use_bag)
+    if use_bag:                    # the estimate put in the LiDAR frame, as score.py does (reads /tf_static)
+        paths = SC.MK.mc._paths(rj["bag"])
+        T_fl, _ = SC.MK.to_lidar(paths, SC.MK.mc.build_tf_static(paths), rj["machine"], rj["tum_frame"])
+    else:                          # as the method reported it: its frame, a fixed lever arm from the LiDAR
+        T_fl = np.eye(4)
     t, T = SC.load_traj(tum)
     E = np.einsum("nij,jk->nik", T, T_fl)
     tr, Tr = SC.load_traj(ref)
@@ -75,17 +96,18 @@ def load_run(run, ref=None, align="fit"):
         P = E[:, :3, 3]
         how = "in map, no fit" if in_map else "as reported"
     err = np.linalg.norm(P - R[:, :3, 3], axis=1)
-    score_txt = ""
+    score_txt, kind, val = "", ("in map" if in_map else "ATE"), None
     acc = os.path.join(run, "accuracy.json")
     if os.path.exists(acc):
         a = json.load(open(acc))
         key = ("in_map", "position_cm") if in_map else ("ate", "position_cm")
         v = a.get(key[0], {}).get(key[1], {}).get("rmse")
         if v is not None:
-            score_txt = f"{'in map' if in_map else 'ATE'} {v:.1f} cm"
+            val = float(v)
+            score_txt = f"{kind} {v:.1f} cm"
     return {"run": run, "method": rj.get("method", os.path.basename(run.rstrip("/"))),
             "machine": rj.get("machine", ""), "ref": ref, "t": t, "P": P, "err": err,
-            "how": how, "score": score_txt}
+            "how": how, "score": score_txt, "kind": kind, "val": val}
 
 
 def floor_plan(path, bounds, cell=0.1):
@@ -121,6 +143,9 @@ def main():
     ap.add_argument("--size", default="1920x1080", help="WxH")
     ap.add_argument("--labels", default="", help="comma-separated names, in the order of the runs")
     ap.add_argument("--title", default="", help="title above the plan view")
+    ap.add_argument("--use-bag", action="store_true",
+                    help="read each run's bag to put its estimate in the LiDAR frame exactly as score.py does "
+                         "(default: the trajectories alone, each in the frame its method reported)")
     a = ap.parse_args()
 
     import matplotlib
@@ -129,14 +154,30 @@ def main():
     plt.rcParams.update({"font.family": "serif", "font.serif": ["Liberation Serif", "DejaVu Serif"],
                          "font.size": 13, "axes.linewidth": 0.6})
 
-    runs = [load_run(r, a.ref, a.align) for r in a.runs]
+    runs = [load_run(r, a.ref, a.align, a.use_bag) for r in a.runs]
     labels = [s.strip() for s in a.labels.split(",")] if a.labels else []
+    # colour = the method (the same across robots), line style = the robot
+    methods = list(dict.fromkeys(r["method"] for r in runs))
+    machines = list(dict.fromkeys(r["machine"] for r in runs))
+    STYLES = ["-", (0, (5, 2)), (0, (1, 1.5)), (0, (8, 2, 1, 2))]
     for k, r in enumerate(runs):
         name = labels[k] if k < len(labels) and labels[k] else NAMES.get(r["method"], r["method"])
-        if len({x["machine"] for x in runs}) > 1:
-            name += f" · {r['machine']}"
-        r["label"] = name + (f"  ({r['score']})" if r["score"] else "")
-        r["colour"] = COLOURS[k % len(COLOURS)]
+        r["name"] = name
+        r["colour"] = COLOURS[methods.index(r["method"]) % len(COLOURS)]
+        r["style"] = STYLES[machines.index(r["machine"]) % len(STYLES)]
+    for m in methods:                                   # one legend entry per method, its score per robot
+        rs = [r for r in runs if r["method"] == m]
+        vals = [r for r in rs if r["val"] is not None]
+        if not vals:
+            score = ""
+        elif len(machines) > 1:
+            score = f"  ({rs[0]['kind']}: " + ", ".join(
+                f"{r['machine'].replace('mobile_', 'm')} {r['val']:.1f}" for r in vals) + " cm)"
+        else:
+            score = f"  ({vals[0]['kind']} {vals[0]['val']:.1f} cm)"
+        rs[0]["label"] = rs[0]["name"] + score
+        for r in rs[1:]:
+            r["label"] = None
     refs = {}
     for r in runs:
         if r["ref"] not in refs:
@@ -169,19 +210,25 @@ def main():
     for k, (tr, pr) in enumerate(refs.values()):
         sel = (tr >= t0) & (tr <= t1)
         axp.plot(pr[sel, 0], pr[sel, 1], color="#c9c9c4", lw=0.8, zorder=1)
-        ln, = axp.plot([], [], color="#1a1a19", lw=1.2, ls=(0, (4, 2)), zorder=5,
+        ln, = axp.plot([], [], color="#1a1a19", lw=1.0, alpha=0.85, zorder=5,
                        label="Reference (stage 04 LiDAR)" if k == 0 else None)
         ref_lines.append((ln, tr, pr))
     tracks = []
     for r in runs:
-        ln, = axp.plot([], [], color=r["colour"], lw=1.8, zorder=3, label=r["label"])
-        dot, = axp.plot([], [], "o", color=r["colour"], ms=8, mec="white", mew=1.5, zorder=4)
-        el, = axe.plot([], [], color=r["colour"], lw=1.6)
+        ln, = axp.plot([], [], color=r["colour"], ls=r["style"], lw=1.8, zorder=3)
+        dot, = axp.plot([], [], "o" if r["style"] == "-" else "s", color=r["colour"], ms=8, mec="white", mew=1.5, zorder=4)
+        el, = axe.plot([], [], color=r["colour"], ls=r["style"], lw=1.5)
         tracks.append((r, ln, dot, el))
-    axp.legend(loc="upper left", bbox_to_anchor=(1.05, 0.40), frameon=False, fontsize=13)
+    from matplotlib.lines import Line2D
+    handles = [Line2D([], [], color="#1a1a19", lw=1.0, label="Reference (stage 04 LiDAR)")]
+    handles += [Line2D([], [], color=r["colour"], lw=2.4, label=r["label"]) for r in runs if r["label"]]
+    if len(machines) > 1:
+        handles += [Line2D([], [], color="#555550", lw=1.8, ls=STYLES[k % len(STYLES)],
+                           marker="o" if k == 0 else "s", ms=6, label=m) for k, m in enumerate(machines)]
+    axp.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.05, 0.40), frameon=False, fontsize=13)
     hows = sorted({r["how"] for r in runs})
     fig.text(0.68, 0.075, "Estimates placed on the reference by: " + "; ".join(
-        f"{h} ({', '.join(NAMES.get(r['method'], r['method']) for r in runs if r['how'] == h)})" for h in hows),
+        f"{h} ({', '.join(dict.fromkeys(r['name'] for r in runs if r['how'] == h))})" for h in hows),
         fontsize=11, color="#555550", wrap=True)
     emax = max(float(np.percentile(r["err"], 99.5)) for r in runs)
     axe.set_xlim(0, t1 - t0); axe.set_ylim(0, max(0.05, emax * 1.1))
