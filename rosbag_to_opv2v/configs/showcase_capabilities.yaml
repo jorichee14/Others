@@ -1,0 +1,101 @@
+# Showcase video for the two platform capabilities.
+#
+#   python3 scripts/showcase_video.py configs/showcase_capabilities.yaml \
+#       --clips ~/showcase --out showcase.mp4 [--draft]
+#
+# Clip paths are relative to --clips. A clip not made yet shows as a placeholder
+# card carrying its `make` line, so the cut can be reviewed before every
+# recording exists. Each `make` line is how that clip is produced; run them first.
+# Site 1 is the one shown (AP --ap=-3.823,7.394); for site 2 use --ap=-28.249,-7.207.
+
+style:
+  width: 1920
+  height: 1080
+  fps: 30
+  card_seconds: 6
+  # font: "Noto Sans CJK TC"     # needed if any text below is in Chinese
+
+segments:
+  # ------------------------------------------------------------------ opening
+  - card:
+      kicker: NYCU · Networked robotics
+      title: Multi-robot collaborative perception, communication and digital twin
+      subtitle: A field platform for physical AI and networked intelligence
+      seconds: 5
+
+  # ------------------------------------------------------- capability 1
+  - card:
+      kicker: "1"
+      title: Multimodal robot perception, communication and digital-twin platform
+      bullets:
+        - Robots carrying edge computing units, cameras, LiDAR, radar and Wi-Fi/5G links
+        - Combined with a digital twin of the site and VR remote operation
+        - "Verified: localization, navigation, object recognition, real-time monitoring, remote operation, SLAM"
+      seconds: 8
+
+  - clip: 01_platform.mp4
+    caption: >-
+      Two robots in the NYCU field site. Each one's camera, its LiDAR on the shared
+      map, and the Wi-Fi link to the AP, all recorded together and replayed in sync.
+    make: >-
+      bev_movie.py --root <site1 split> --out 01_platform.mp4
+      --cloud mapping/cloud_in_ref_coop_site_1_20261015.pcd --cameras
+      --ap=-3.823,7.394 --comms wifi.signal_dbm --seconds 30
+      --banner "Multimodal perception and communication, synchronized"
+
+  - clip: 02_slam.mp4
+    caption: >-
+      Multi-robot SLAM. Each robot maps the site on its own; at the first
+      inter-robot loop closure the two maps merge into one.
+    make: >-
+      scoop_pipeline/analysis/slam/trajectory_video.py swarm <export dir>
+      --run <export dir>/runs/<channel> --out 02_slam.mp4 --map <map.pcd>
+      --title "Multi-robot SLAM"
+    speed: 1.0
+
+  - clip: 03_digital_twin.mp4
+    caption: >-
+      Digital twin of the site, reconstructed from the robots' own scans and images
+      (3D Gaussian splatting), with where the camera is on the site plan.
+    make: >-
+      splat_walk.py <level_5.ply> --fly <mesh>_fly_path.json fly.mp4 --frame <anchor_frame.json>;
+      fly_overhead.py <mesh>_fly_path.json overhead.mp4 --cloud <map.ply>;
+      ffmpeg -i fly.mp4 -i overhead.mp4 -filter_complex hstack 03_digital_twin.mp4
+
+  - clip: 04_vr_teleop.mp4
+    caption: >-
+      VR remote operation. The operator drives the robot from its live camera
+      and the digital twin.
+    make: screen/headset recording of a VR teleoperation session
+    seconds: 20
+
+  # ------------------------------------------------------- capability 2
+  - card:
+      kicker: "2"
+      title: Cooperative object detection
+      bullets:
+        - Fuses local observations from different robots, cameras and sensing nodes
+        - Makes up for occlusion, limited field of view and the gaps of a single viewpoint
+        - Supports object detection, obstacle avoidance, scene understanding and multi-agent decisions
+      seconds: 8
+
+  - clip: 05_coop_detection.mp4
+    caption: >-
+      Objects filled in orange are hidden from the ego robot, behind occluders or out
+      of its view, and are recovered from the collaborator's LiDAR. Bottom right:
+      objects detected by the ego alone versus by the pair.
+    make: >-
+      bev_movie.py --root <site1 split> --out 05_coop_detection.mp4
+      --cloud mapping/cloud_in_ref_coop_site_1_20261015.pcd --cameras
+      --labels <labels.json> --boxes-on-camera --only-seen either --max-range 15
+      --coop-gain --ap=-3.823,7.394 --comms wifi.signal_dbm --seconds 45
+      --banner "Cooperative object detection: the collaborator fills the ego's blind spots"
+
+  # ------------------------------------------------------------------ closing
+  - card:
+      kicker: Next
+      title: An AI collaborative perception dataset in the NYCU field
+      bullets:
+        - Multi-robot LiDAR, camera, radar and link measurements, time-synchronized and labelled
+        - A testbed for joint design of communication, perception and AI
+      seconds: 6

@@ -12,6 +12,7 @@ doing, at one glance.
         [--cloud mapping/cloud_in_ref_<tag>.pcd]   # the map under them
         [--cameras] [--comms wifi.rssi] [--theme dark]
         [--seconds 45] [--fps 20] [--trail 0]      # 0: the whole path stays
+        [--coop-gain] [--banner "Cooperative object detection"]
 
 The access points, picked in each site's own anchored cloud. Both carry a
 leading minus, so pass them with an equals sign or the shell reads the value
@@ -24,6 +25,17 @@ A camera slower than the frame grid (the ZED at 1.3 Hz on a 10 Hz grid) has no
 image in most frames. Its panel holds the last one it had and says so, rather
 than going black -- a black panel for ten frames in eleven reads as a broken
 sensor, which it is not.
+
+`--coop-gain` is the cooperative-detection view. Every frame, each labelled
+object on the map is drawn by who actually has LiDAR returns inside it: solid
+where the ego's own sweep finds it, filled in the collaborator's colour where
+only the collaborator does (the ego's occluded or out-of-view objects, which
+fusion hands back to it), faint where neither does. The caption counts them,
+and a trace across the bottom runs "ego alone" against "ego + collaborator":
+the gap between the two lines is what cooperation buys, frame by frame.
+
+`--banner` puts one line of text across the top of the figure, for a video
+cut into a presentation (showcase_video.py does the cutting).
 
 `--comms` takes a dotted path into the frame yaml's comms block, e.g.
 `wifi.rssi` or `links.csi_mobile_2_to_mobile_1.rssi_median`. Run without it and
@@ -46,7 +58,7 @@ import matplotlib.image as mpimg                                # noqa: E402
 import matplotlib.pyplot as plt                                 # noqa: E402
 import numpy as np                                              # noqa: E402
 import yaml                                                     # noqa: E402
-from matplotlib.patches import Polygon                          # noqa: E402
+from matplotlib.patches import Patch, Polygon                   # noqa: E402
 
 from ros2opv2v.geometry import invert, x_to_world                # noqa: E402
 from ros2opv2v.statics import box_corners as box_corners_3d      # noqa: E402
@@ -349,6 +361,12 @@ def main() -> int:
                         help="draw a box only within this far of either robot "
                              "(0: no limit); a box 20 m down a corridor is a few "
                              "pixels of clutter, not a reading of the frame")
+    parser.add_argument("--coop-gain", action="store_true",
+                        help="draw each object by who sees it this frame (ego / only "
+                             "the collaborator / neither), count them, and trace "
+                             "ego-alone against the pair across the bottom")
+    parser.add_argument("--banner", default=None, metavar="TEXT",
+                        help="a title line across the top of the figure")
     parser.add_argument("--seconds", type=float, default=45.0)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--rate", type=float, default=10.0, help="the frame grid's rate (Hz)")
@@ -400,7 +418,8 @@ def main() -> int:
     tracks, series, boxes, available = {}, {}, {}, {}
     for agent in agents:
         track, found, got, seen = read_track(os.path.join(scenario, agent), args.comms,
-                                             want_camera=args.boxes_on_camera)
+                                             want_camera=(args.boxes_on_camera
+                                                          or args.coop_gain))
         tracks[agent], series[agent] = track, got
         boxes.update(found)
         available.update(seen)
@@ -438,11 +457,13 @@ def main() -> int:
     picture = camera_aspect(scenario, agents) if shown_cameras else 1.0
 
     left, right, top, bottom = 0.78, 0.18, 0.30, 0.62      # inches of margin
+    if args.banner:
+        top += 0.55                                        # room for the title line
     gap_h, gap_row, gap_block = 0.42, 0.46, 0.95           # inches between panels
     width = even_inches(args.fig_width, args.dpi)
     height = even_inches(width / args.fig_aspect, args.dpi)
     usable_w, usable_h = width - left - right, height - top - bottom
-    traces = len(args.comms)
+    traces = len(args.comms) + (1 if args.coop_gain else 0)
     share = args.comms_height if traces else 0.0
 
     def arrangement(columns):
@@ -490,6 +511,9 @@ def main() -> int:
           f"{chosen['columns']} to a row; {traces} trace(s) {comms_height:.1f} in")
 
     figure = plt.figure(figsize=(width, height), facecolor=theme["bg"])
+    if args.banner:
+        figure.text(left / width, 1.0 - 0.22 / height, args.banner, ha="left",
+                    va="top", color=theme["ink"], fontsize=17, fontweight="bold")
 
     def place(x, y, w, h):
         """An axes at an exact position in inches, measured from the top left."""
@@ -519,13 +543,14 @@ def main() -> int:
         axis.scatter(cloud[:, 0], cloud[:, 1], s=0.3, c=theme["map"], linewidths=0, zorder=1)
         print(f"map: {len(cloud):,} points drawn")
 
-    shown = set()
-    for entry in boxes.values():
+    shown, outlines = set(), {}
+    for key, entry in boxes.items():
         colour = class_colour(entry, theme)
         name = entry.get("class_name") or entry.get("obj_type") or "object"
-        axis.add_patch(Polygon(box_corners(entry), closed=True, fill=False,
-                               edgecolor=colour, lw=1.8, zorder=4,
-                               label=None if name in shown else name))
+        outlines[key] = axis.add_patch(Polygon(box_corners(entry), closed=True,
+                                               fill=False, edgecolor=colour, lw=1.8,
+                                               zorder=4,
+                                               label=None if name in shown else name))
         shown.add(name)
 
     if ap is not None:
@@ -560,7 +585,20 @@ def main() -> int:
                         fontsize=11, va="top", family="monospace", zorder=10,
                         bbox=dict(boxstyle="round,pad=0.4", fc=theme["panel"],
                                   ec=theme["grid"]))
-    legend = axis.legend(loc="lower right", fontsize=9, framealpha=0.0)
+    handles, _ = axis.get_legend_handles_labels()
+    if args.coop_gain:
+        # What the three box styles mean; the class colours say what the
+        # object is, these say who has it.
+        handles += [
+            Patch(facecolor="none", edgecolor=theme["ink"], lw=1.8,
+                  label="seen by ego"),
+            Patch(facecolor=theme["agents"][1], alpha=0.35, edgecolor=theme["ink"],
+                  lw=1.2, ls=(0, (3, 2)), label="filled in by collaborator"),
+            Patch(facecolor="none", edgecolor=theme["muted"], lw=0.8, alpha=0.4,
+                  label="not seen"),
+        ]
+    legend = axis.legend(handles=handles, loc="lower right", fontsize=9,
+                         framealpha=0.0)
     for text in legend.get_texts():
         text.set_color(theme["muted"])
 
@@ -600,6 +638,31 @@ def main() -> int:
             for text in legend.get_texts():
                 text.set_color(theme["muted"])
         cursors.append(panel.axvline(0, color=theme["ink"], lw=1.0))
+
+    gain_lines, gain_fill, gain_panel = None, None, None
+    gain_t, gain_ego, gain_pair = [], [], []
+    if args.coop_gain:
+        gain_panel = side[slot]
+        slot += 1
+        gain_panel.set_facecolor(theme["panel"])
+        ego_line, = gain_panel.plot([], [], lw=1.6, color=theme["agents"][0],
+                                    drawstyle="steps-post", label="ego alone")
+        pair_line, = gain_panel.plot([], [], lw=1.6, color=theme["agents"][1],
+                                     drawstyle="steps-post",
+                                     label="ego + collaborator")
+        gain_lines = (ego_line, pair_line)
+        gain_panel.set_xlim(clock[0], clock[-1])
+        gain_panel.set_ylim(0, max(1, len(boxes)) + 0.5)
+        gain_panel.set_title("objects detected (LiDAR returns inside the box)",
+                             color=theme["ink"], fontsize=9, loc="left")
+        gain_panel.tick_params(colors=theme["muted"], labelsize=7)
+        gain_panel.grid(True, color=theme["grid"], lw=0.5)
+        for spine in gain_panel.spines.values():
+            spine.set_color(theme["grid"])
+        gain_panel.set_xlabel("time (s)", color=theme["muted"], fontsize=8)
+        legend = gain_panel.legend(fontsize=7, framealpha=0.0, loc="upper left")
+        for text in legend.get_texts():
+            text.set_color(theme["muted"])
 
     # ------------------------------------------------------------------ frames
     frames_dir = os.path.splitext(os.path.expanduser(args.out))[0] + "_frames"
@@ -646,6 +709,38 @@ def main() -> int:
             for agent, where in zip(agents, (a, b)):
                 lines.append(f"AP-{agent}  "
                              f"{np.hypot(where[1] - ap[0], where[2] - ap[1]):5.1f} m")
+        if args.coop_gain:
+            # Who has each object NOW: the ego's own sweep, or only the
+            # collaborator's carried into the same map. The second set is the
+            # whole case for cooperative perception -- objects behind the
+            # ego's occluders or outside its view, handed back by the pair.
+            ego_has = seen_by(returns_of(agents[0], index), boxes, args.min_points)
+            pair_has = set(ego_has)
+            for other in agents[1:]:
+                pair_has |= seen_by(returns_of(other, index), boxes, args.min_points)
+            for key, patch in outlines.items():
+                colour = class_colour(boxes[key], theme)
+                if key in ego_has:
+                    patch.set(fill=False, edgecolor=colour, lw=2.0, ls="-", alpha=1.0)
+                elif key in pair_has:
+                    patch.set(fill=True, facecolor=theme["agents"][1],
+                              edgecolor=colour, lw=1.6, ls=(0, (3, 2)), alpha=0.6)
+                else:
+                    patch.set(fill=False, edgecolor=theme["muted"], lw=0.8,
+                              ls="-", alpha=0.35)
+            gained = len(pair_has) - len(ego_has)
+            lines.append(f"ego alone {len(ego_has):3d} obj")
+            lines.append(f"with coop {len(pair_has):3d} obj  (+{gained})")
+            gain_t.append(index / args.rate)
+            gain_ego.append(len(ego_has))
+            gain_pair.append(len(pair_has))
+            gain_lines[0].set_data(gain_t, gain_ego)
+            gain_lines[1].set_data(gain_t, gain_pair)
+            if gain_fill is not None:
+                gain_fill.remove()
+            gain_fill = gain_panel.fill_between(gain_t, gain_ego, gain_pair,
+                                                step="post", color=theme["agents"][1],
+                                                alpha=0.18, lw=0)
         caption.set_text("\n".join(lines))
         for position, (agent, panel, _) in enumerate(cameras):
             image, fresh = load_image(os.path.join(scenario, agent), keys[index],
