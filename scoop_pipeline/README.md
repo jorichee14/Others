@@ -214,6 +214,9 @@ analysis/            measuring results; reads outputs, writes nothing back
   headroom.py configs/headroom_terms.json [--traj ref.tum ...]  E1: every testbed error term
                           against the fusion breaking points, like against like, log axis
   maps.py, trajs.py  the map and trajectory checks, run through check.py (above)
+  camera_coverage.py fixed cameras re-aimed (pan / tilt only) for the most floor seen by 2+
+                     of them: person-high columns on the free floor, ray-cast against the
+                     mesh; coordinate ascent + optional integer program; before/after maps
   twin_cloud.py      a USD digital twin's fixed geometry as a labelled point cloud
                      (movable furniture left out; the twin itself stays out of the repo)
   twin_compare.py    a map against twin_cloud's cloud, its furniture allowed to have moved:
