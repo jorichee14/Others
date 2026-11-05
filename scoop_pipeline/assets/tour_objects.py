@@ -24,7 +24,6 @@ Needs open3d, opencv.
 """
 import argparse
 import colorsys
-import hashlib
 import json
 import os
 import sys
@@ -36,10 +35,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 
+_HUES = {}
+
+
 def colour_of(label):
-    """A bright BGR colour fixed per label."""
-    h = int(hashlib.md5(label.encode()).hexdigest()[:6], 16) / float(0xFFFFFF)
-    r, g, b = colorsys.hsv_to_rgb(h, 0.75, 1.0)
+    """A bright BGR colour per label: hues a golden-ratio step apart in the
+    order the labels first come up, so a handful of labels never look alike."""
+    if label not in _HUES:
+        _HUES[label] = (0.61803398875 * len(_HUES) + 0.1) % 1.0
+    r, g, b = colorsys.hsv_to_rgb(_HUES[label], 0.8, 1.0)
     return int(255 * b), int(255 * g), int(255 * r)
 
 

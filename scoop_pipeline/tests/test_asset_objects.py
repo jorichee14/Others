@@ -282,6 +282,43 @@ def test_parts_absorb_a_misnamed_piece_keep_a_thing_on_it(d):
         assert os.path.isfile(os.path.join(out, r["points"]))
 
 
+def test_camera_tour(d):
+    import camera_tour as ct
+    ex, masks, objs = make_export(d)
+    out = os.path.join(d, "registry")
+    ob.main([ex, out, "--prompts", "table,chair", "--segmenter", "npz:" + masks,
+             "--every", "1", "--min-points", "100"])
+    reg = json.load(open(os.path.join(out, "objects.json")))["objects"]
+    vid = os.path.join(d, "tour.mp4")
+    ct.main([ex, out, vid, "--min-pixels", "50", "--fps", "5"])
+    cap = cv2.VideoCapture(vid)
+    n = 0
+    while cap.read()[0]:
+        n += 1
+    assert n == 16, n
+    # each frame: the objects it shows in the segmenter's masks, boxed where they are
+    from objects import Export
+    from views import read_ply_xyz
+    e = Export(ex)
+    pts = [read_ply_xyz(os.path.join(out, o["points"])) for o in reg]
+    hit = 0
+    for i in range(16):
+        dets = ct.frame_detections(reg, pts, e.depth(i), e.K, e.poses[i], min_pixels=50)
+        m = np.load(os.path.join(masks, "%06d.npz" % i))
+        got, want = [d_["label"] for d_ in dets], m["labels"].tolist()
+        assert all(got.count(l) <= want.count(l) for l in set(got)), (i, got, want)   # nothing invented
+        for d_ in dets:
+            x0, y0, x1, y1 = d_["box"]
+            k = [j for j, l in enumerate(m["labels"]) if l == d_["label"]]
+            ok = False
+            for j in k:
+                ys, xs = np.nonzero(m["masks"][j])
+                c = (xs.mean(), ys.mean())
+                ok |= x0 <= c[0] <= x1 and y0 <= c[1] <= y1
+            hit += ok
+    assert hit >= 0.85 * sum(len(np.load(os.path.join(masks, "%06d.npz" % i))["labels"]) for i in range(16)), hit
+
+
 def test_shell_objects_found_on_walls():
     """A 3 m strip on a wall is shell; a 0.8 m patch on it, a cabinet with its
     front 0.5 m out, a strip 3 m long but mid-room are not."""
