@@ -4,7 +4,8 @@ Digital twin of the ED305 room (16 Basler cameras, see the lab wiki "ED305
 Indoor Camera User Guide") for collaborative perception. The plan is
 [PLAN.md](PLAN.md); camera placement step by step is [WORKFLOW.md](WORKFLOW.md); what runs on the robots' Jetson Orin vs the server in the dynamic twin is
 [DATAFLOW.md](DATAFLOW.md); how to improve the Gaussian map's appearance without
-loosening the geometry is [APPEARANCE.md](APPEARANCE.md). v1 so far: coverage / blind spots, placement within each mount's range, and measuring that range from video.
+loosening the geometry is [APPEARANCE.md](APPEARANCE.md); fine-tuning YOLO on the cameras' recordings is
+[DETECTOR.md](DETECTOR.md). v1 so far: coverage / blind spots, placement within each mount's range, and measuring that range from video.
 
 ```
 ed305/camera.py        pinhole camera in the room frame; loads cameras YAML
@@ -21,6 +22,11 @@ configs/room_nominal.yaml     PLACEHOLDER room size, no furniture yet
 configs/cameras_nominal.yaml  PLACEHOLDER layout from the wiki map (not a calibration)
 configs/mounts_small.yaml  ASSUMED range: +-15 deg re-aim, nothing slides (the default)
 configs/mounts_wide.yaml   ASSUMED range: +-45 deg pan, tilt 15-80, ceiling row turns fully
+extract_frames.py      command line: sample frames from recordings for labelling
+prelabel.py            command line: draft YOLO labels from a pretrained model
+make_dataset.py        command line: train / val split (by time or camera), data.yaml
+train_yolo.py          command line: fine-tune YOLO, compare with the pretrained model
+ed305/yolo_data.py     frame sampling, YOLO labels, class matching, the split
 tests/                 pytest
 ```
 

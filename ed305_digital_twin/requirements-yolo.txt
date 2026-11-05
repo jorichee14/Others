@@ -1,0 +1,3 @@
+# on top of requirements.txt, for prelabel.py and train_yolo.py (GPU machine)
+# install torch for your CUDA first (pytorch.org), then:
+ultralytics>=8.4
