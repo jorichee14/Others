@@ -197,6 +197,8 @@ assets/              object asset management (the asset report's pipeline), on a
   overview.py        the registry to look at: overview.ply (one colour per object) and
                      overview_top.png (top-down, named, over the room); lists the objects
                      that pooled several names and those kept with a low recall
+  tour_objects.py    lod3dgs.py fly's video with the registry on it: each object the camera
+                     sees (ray-cast against the mesh, no display) boxed and named per frame
   split_scene.py     the room map split into structure and objects: each registry object's
                      surfaces (map points near its own), the shell (floor, ceiling, walls),
                      the rest ("other"); each part meshed at its own resolution (shell coarse,
