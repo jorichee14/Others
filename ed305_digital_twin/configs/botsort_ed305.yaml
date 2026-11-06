@@ -1,0 +1,22 @@
+# BoT-SORT for the ED305 room cameras (fixed cameras, people sitting, standing up,
+# hidden behind desks and each other). Changed from Ultralytics' botsort.yaml:
+#   gmc_method none        the cameras do not move: no camera-motion compensation
+#   track_buffer 90        keep a lost person 3 s (at 30 fps) instead of 1 s, so standing
+#                          up or walking behind someone keeps the same ID
+#   with_reid True         also compare appearance (clothes), from the detector's own
+#                          features (model: auto), so a box that changes shape keeps its ID
+#   proximity_thresh 0.3   use appearance even when the new box overlaps the old one less
+#   track_low_thresh 0.05  keep following people the detector is unsure of (score 0.05+)
+# Use: yolo track model=best.pt source=cam_3.mkv tracker=configs/botsort_ed305.yaml
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.05
+new_track_thresh: 0.3
+track_buffer: 90
+match_thresh: 0.8
+fuse_score: True
+gmc_method: none
+proximity_thresh: 0.3
+appearance_thresh: 0.8
+with_reid: True
+model: auto
