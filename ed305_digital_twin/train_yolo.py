@@ -66,6 +66,8 @@ def value(s):
 
 def main():
     a = parse()
+    if not a.data.exists():
+        raise SystemExit(f"{a.data} does not exist: run make_dataset.py on the dataset folder first")
     from ultralytics import YOLO
 
     data = yaml.safe_load(a.data.read_text())
