@@ -84,8 +84,23 @@ pair is mixed up there.
 ## On ED305 data
 
 Needs: the cameras calibrated in the room frame (`cameras.json`, floor z = 0)
-and synced recordings (`cam_N_times.csv` from `flash_sync.py`: lights off and
-on once while recording).
+and the recordings on one clock (`cam_N_times.csv` next to each video). Two ways
+to get the times files:
+
+| | how | when |
+|---|---|---|
+| `motion_sync.py rec/` | from the motion the cameras see together: people moving change several cameras at the same instant; cross-correlation per camera pair, one least-squares fit over all pairs (`ed305/sync.py`) | recordings you already have; needs people moving, offsets up to `--max-lag` (default 10 s; raise it if the recordings were started by hand minutes apart) |
+| `flash_sync.py` (calibration repo) | lights off and on once while recording | new recordings |
+
+```bash
+python motion_sync.py ~/Downloads/yolo_20261105_10 --check-drift
+```
+
+It prints each camera's offset and how well the camera pairs agree (residual in
+ms; a frame is 33 ms). A camera that shares no motion with the others is
+reported NOT SYNCED and gets no times file. Tested on a synthetic 6-camera
+scene with known start offsets: every offset within about 1 ms. One recording
+per camera in the folder (move the `.mp4` copies out if the `.mkv` are there too).
 
 ```bash
 pip install -r requirements.txt -r requirements-yolo.txt
