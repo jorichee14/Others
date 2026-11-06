@@ -93,7 +93,7 @@ puts them together, finding the floor in the LiDAR map:
 
 ```bash
 python make_room_cameras.py --extrinsics .../mapping/cameras_ed305/cameras.yaml \
-    --intrinsics .../raw/20261105/calibration --floor-pcd .../mapping/<map>.pcd
+    --intrinsics <folder with cam_N.json> --floor-map .../mapping/mapping/ed305_room_ceil.ply
 ```
 
 The floor is fitted as a plane, so a map that is slightly tilted (ED305's is
