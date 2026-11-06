@@ -30,6 +30,7 @@ ed305/multiview.py     people from many calibrated views: association, misses, r
 fix_labels.py          window: correct boxes by hand (drag = new box, right click = delete)
 show_labels.py         command line: frames with their boxes drawn, a sheet per camera
 motion_sync.py         command line: recordings on one clock from the motion the cameras see (no flash)
+mosaic.py              command line: all cameras in one video on the common clock (+ detections / tracking)
 ed305/sync.py          motion signals, pairwise offsets, the global fit
 room_track.py          command line: room tracker, one identity per person from any sensors
 ed305/tracking/        sensor contract, tracker (tracklets + global linking), adapters, IDF1, simulated room

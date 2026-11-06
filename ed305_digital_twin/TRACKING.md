@@ -96,6 +96,10 @@ to get the times files:
 python motion_sync.py ~/Downloads/yolo_20261105_10 --check-drift
 ```
 
+To look at all cameras together (and check the sync by eye) before there is a
+calibration: `python mosaic.py rec/ --model best.pt --track --out all.mp4`
+(one grid video; per-camera tracking IDs).
+
 It prints each camera's offset and how well the camera pairs agree (residual in
 ms; a frame is 33 ms). A camera that shares no motion with the others is
 reported NOT SYNCED and gets no times file. Tested on a synthetic 6-camera
@@ -110,7 +114,9 @@ python room_track.py --rec rec/ --calib results/extrinsics/cameras.json \
 ```
 
 Outputs `tracks.csv` (paths in metres), `boxes.csv` (every camera box with its
-room identity), `cam_3_ids.mp4`, `summary.md`. Other sensors join with
+room identity), `cam_3_ids.mp4` (`--video all`: `all_ids.mp4`, every camera in
+one grid with the room identities + the floor plan with everyone's path),
+`summary.md`. Other sensors join with
 `--measurements radar.csv robot_1.csv` and their models in `--sensors`.
 
 Tested end to end on 16 rendered recordings (people cut from a real ED305 frame,

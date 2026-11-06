@@ -19,12 +19,12 @@ Writes to --out:
   tracks.csv        track, t, x, y, vx, vy: every person's path in the room frame
   measurements.csv  every measurement with the track it was given (empty: clutter)
   boxes.csv         (cameras) t, camera, x0, y0, x1, y1, track: each camera box with the room identity
-  <cam>_ids.mp4     (--video) that camera with the room identities drawn
+  <cam>_ids.mp4     (--video cam_3) that camera with the room identities drawn
+  all_ids.mp4       (--video all) every camera in one grid + the floor plan with everyone's path
   summary.md        tracks, how long, which sensors; with --sim also the identity scores
 """
 import argparse
 import csv
-import zlib
 from pathlib import Path
 
 import cv2
@@ -56,7 +56,8 @@ def parse():
     ap.add_argument("--device", default=None)
     ap.add_argument("--det-conf", type=float, default=0.05)
     ap.add_argument("--min-views", type=int, default=2)
-    ap.add_argument("--video", help="also write this camera with the room identities, e.g. cam_3")
+    ap.add_argument("--video", help="also write a video with the room identities: a camera (cam_3), or 'all' "
+                                    "(every camera in one grid + the floor plan)")
     ap.add_argument("--no-link", action="store_true", help="stop after stage 1 (tracklets), for comparison")
     return ap.parse_args()
 
@@ -123,6 +124,7 @@ def camera_measurements(a, out):
         print(f"  t {T:8.1f} s: {len(people)} people", end="\r")
     print()
     area = (bounds[1] - bounds[0]) * (bounds[3] - bounds[2])
+    a.bounds_used = bounds
     return meas, camera_sensor(grid, a.min_views, clutter=0.2 / area), cams, videos, steps
 
 
@@ -158,8 +160,75 @@ def summary(tracks, meas, owner):
 
 
 def color(tid):
-    h = zlib.crc32(str(tid).encode()) % 180
-    return tuple(int(v) for v in cv2.cvtColor(np.uint8([[[h, 200, 230]]]), cv2.COLOR_HSV2BGR)[0, 0])
+    from mosaic import color as c
+    return c(tid)
+
+
+def floor_plan(tracks, cams, bounds, T, h=864, trail=3.0):
+    """The room from above at time T: cameras, every track's position, its last `trail` seconds."""
+    x0, x1, y0, y1 = bounds
+    pad = 0.5
+    s = (h - 40) / (y1 - y0 + 2 * pad)
+    w = int((x1 - x0 + 2 * pad) * s)
+    img = np.full((h, w, 3), 245, np.uint8)
+    px = lambda x, y: (int((x - x0 + pad) * s), int((y1 + pad - y) * s) + 30)
+    for gx in np.arange(np.ceil(x0), x1 + 1e-9):
+        cv2.line(img, px(gx, y0), px(gx, y1), (225, 225, 225), 1)
+    for gy in np.arange(np.ceil(y0), y1 + 1e-9):
+        cv2.line(img, px(x0, gy), px(x1, gy), (225, 225, 225), 1)
+    cv2.rectangle(img, px(x0, y1), px(x1, y0), (120, 120, 120), 2)
+    for c in cams:
+        cv2.circle(img, px(*c.center[:2]), 5, (90, 90, 90), -1)
+        cv2.putText(img, c.name.replace("cam_", ""), px(c.center[0] + 0.1, c.center[1] + 0.1),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (90, 90, 90), 1, cv2.LINE_AA)
+    for tk in tracks:
+        if not (tk.t0 <= T <= tk.t1):
+            continue
+        ts = np.linspace(max(tk.t0, T - trail), T, 20)
+        P = tk.position_at(ts)
+        P = P[~np.isnan(P[:, 0])]
+        if not len(P):
+            continue
+        col = color(tk.id)
+        cv2.polylines(img, [np.array([px(*p) for p in P], np.int32)], False, col, 2, cv2.LINE_AA)
+        cv2.circle(img, px(*P[-1]), max(5, int(0.25 * s)), col, -1, cv2.LINE_AA)
+        cv2.putText(img, tk.id, px(P[-1][0] + 0.3, P[-1][1] + 0.3), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2, cv2.LINE_AA)
+    cv2.putText(img, f"room, t {T:.1f} s", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 60, 60), 1, cv2.LINE_AA)
+    return img
+
+
+def render_all(a, cams, videos, steps, meas, owner, tracks):
+    """Every camera in one grid with the room identities, and the floor plan on the right."""
+    import math
+    from mosaic import draw_boxes, even, grid, tile
+    from multiview_label import SyncedVideo
+    size = (480, 270)
+    vs = [SyncedVideo(v.path) for v in videos]
+    by = {}
+    for k, m in enumerate(meas):
+        for cam, b in (m.meta.get("boxes") or {}).items():
+            by.setdefault((round(m.t, 3), cam), []).append((b, owner.get(k)))
+    cols = math.ceil(math.sqrt(len(cams)))
+    path = a.out / "all_ids.mp4"
+    vw = None
+    for T in steps:
+        tiles = []
+        for c, v in zip(cams, vs):
+            f = v.at(T)
+            img = tile(f, size, f"{c.name}   t {T:7.2f} s")
+            items = by.get((round(float(T), 3), c.name), [])
+            if f is not None and items:
+                draw_boxes(img, [b for b, _ in items], labels=[tid or "?" for _, tid in items],
+                           colors=[color(tid) if tid else (150, 150, 150) for _, tid in items], scale=size[0] / f.shape[1])
+            tiles.append(img)
+        g = grid(tiles, cols, size)
+        out = even(np.hstack([g, floor_plan(tracks, cams, a.bounds_used, float(T), h=g.shape[0])]))
+        if vw is None:
+            vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), a.rate, (out.shape[1], out.shape[0]))
+        vw.write(out)
+    if vw is not None:
+        vw.release()
+    print(f"video: {path}")
 
 
 def render(a, cams, videos, steps, meas, owner):
@@ -227,7 +296,10 @@ def main():
     if a.video:
         if cams is None:
             raise SystemExit("--video needs --rec")
-        render(a, cams, videos, steps, meas, owner)
+        if a.video == "all":
+            render_all(a, cams, videos, steps, meas, owner, tracks)
+        else:
+            render(a, cams, videos, steps, meas, owner)
 
 
 if __name__ == "__main__":
