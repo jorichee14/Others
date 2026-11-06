@@ -10,12 +10,14 @@
 --intrinsics   folder searched (recursively) for cam_N.json / cam_N.yaml with K and
                distortion (calibration dashboard results, the March 2026 files, or a
                ROS camera_info); of cam_N_2, cam_N_3 ... the newest round is used
---floor-z      the floor's height in the map (the map's origin is where the LiDAR
-               started, not the floor), or
---floor-pcd    the LiDAR map: the floor is found as the lowest large horizontal layer
+--floor-map    the LiDAR map (.pcd or .ply, ascii or binary): the floor PLANE is fitted
+               to it (RANSAC, then least squares), so a map that is slightly tilted is
+               levelled too (recommended), or
+--floor-z      the floor's height in the map as one number (assumes the map is level)
 
 Writes configs/cameras_room.yaml (this repo's format: K, dist, size, T_world_cam):
-the map's x, y kept, z moved so the floor is at 0. That file is --calib for
+the room frame is the map turned so the floor plane is level, and moved so the
+floor is at z = 0 (x, y stay close to the map's). That file is --calib for
 multiview_label.py and room_track.py. Prints per camera its height above the
 floor, its tilt and where it looks at on the floor: check them against the room.
 """
@@ -36,7 +38,8 @@ def parse():
     ap.add_argument("--intrinsics", type=Path, required=True)
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--floor-z", type=float, help="floor height in the map frame (m)")
-    g.add_argument("--floor-pcd", type=Path, help="LiDAR map (.pcd, ascii or binary) to find the floor in")
+    g.add_argument("--floor-map", "--floor-pcd", dest="floor_map", type=Path,
+                   help="LiDAR map (.pcd or .ply) to fit the floor plane in")
     ap.add_argument("--out", type=Path, default=HERE / "configs/cameras_room.yaml")
     return ap.parse_args()
 
@@ -61,13 +64,16 @@ def read_intrinsics(path):
     K = first("K", "camera_matrix", "k", "intrinsic")
     if isinstance(K, dict):
         K = K.get("data")
-    if K is None and "fx" in d:
+    if K is None and "fx" in d and "cx" in d:
         K = [[d["fx"], 0, d["cx"]], [0, d["fy"], d["cy"]], [0, 0, 1]]
     dist = first("dist", "dist_coeffs", "distortion_coefficients", "distortion", "d", "D")
     if isinstance(dist, dict):
         dist = dist.get("data")
     w = first("img_w", "width", "image_width")
     h = first("img_h", "height", "image_height")
+    size = first("image_size", "img_size", "resolution")
+    if size is not None and (w is None or h is None):
+        w, h = (size["width"], size["height"]) if isinstance(size, dict) else (size[0], size[1])
     if K is None:
         raise ValueError(f"{path}: no K / camera_matrix")
     K = np.asarray(K, float).reshape(3, 3)
@@ -124,7 +130,101 @@ def read_pcd(path):
     return np.c_[a["x"], a["y"], a["z"]].astype(float)
 
 
-def floor_from_points(P):
+_PLY = {"float": "f4", "float32": "f4", "double": "f8", "float64": "f8", "uchar": "u1", "uint8": "u1",
+        "char": "i1", "int8": "i1", "short": "i2", "int16": "i2", "ushort": "u2", "uint16": "u2",
+        "int": "i4", "int32": "i4", "uint": "u4", "uint32": "u4"}
+
+
+def read_ply(path):
+    """(N, 3) vertices of a .ply (ascii or binary little endian)."""
+    raw = path.read_bytes()
+    end = raw.index(b"end_header") + len(b"end_header")
+    end = raw.index(b"\n", end) + 1
+    lines = raw[:end].decode("ascii", "replace").splitlines()
+    fmt, props, n, in_vertex = None, [], 0, False
+    for line in lines:
+        w = line.split()
+        if not w:
+            continue
+        if w[0] == "format":
+            fmt = w[1]
+        elif w[0] == "element":
+            in_vertex = w[1] == "vertex"
+            if in_vertex:
+                n = int(w[2])
+        elif w[0] == "property" and in_vertex:
+            if w[1] == "list":
+                raise SystemExit(f"{path}: list properties in vertices not supported")
+            props.append((w[2], _PLY[w[1]]))
+    names = [p[0] for p in props]
+    if fmt == "ascii":
+        a = np.loadtxt(raw[end:].decode().splitlines()[:n], ndmin=2)
+        return a[:, [names.index(c) for c in "xyz"]].astype(float)
+    if fmt != "binary_little_endian":
+        raise SystemExit(f"{path}: {fmt} not supported")
+    a = np.frombuffer(raw, dtype=np.dtype([(nm, "<" + t) for nm, t in props]), count=n, offset=end)
+    return np.c_[a["x"], a["y"], a["z"]].astype(float)
+
+
+def read_points(path):
+    return read_ply(path) if path.suffix.lower() == ".ply" else read_pcd(path)
+
+
+def floor_plane(P, max_tilt_deg=5.0, tol=0.02, iters=500, seed=0):
+    """Floor plane of a room scan: (unit normal n with n_z > 0, d) with n.p + d = 0 on the floor,
+    the inlier RMS (m) and the share of the scan on it.
+    Candidates: points near the lowest large height layer (wide, so a tilted floor is still in it);
+    RANSAC for a near-horizontal plane, then a least-squares fit to its inliers."""
+    P = P[np.isfinite(P).all(1)]
+    z0, _ = floor_from_points(P, window=0.04)
+    C = P[np.abs(P[:, 2] - z0) < 0.3]
+    rng = np.random.default_rng(seed)
+    best, best_n = None, -1
+    cos_max = np.cos(np.radians(max_tilt_deg))
+    sub = C if len(C) < 200000 else C[rng.choice(len(C), 200000, replace=False)]
+    for _ in range(iters):
+        a, b, c = sub[rng.choice(len(sub), 3, replace=False)]
+        n = np.cross(b - a, c - a)
+        if np.linalg.norm(n) < 1e-9:
+            continue
+        n /= np.linalg.norm(n)
+        if n[2] < 0:
+            n = -n
+        if n[2] < cos_max:
+            continue
+        cnt = int(np.sum(np.abs(sub @ n - n @ a) < tol))
+        if cnt > best_n:
+            best, best_n = (n, -n @ a), cnt
+    n, d = best
+    for _ in range(3):                                         # least squares on the inliers
+        In = C[np.abs(C @ n + d) < tol]
+        c = In.mean(0)
+        n = np.linalg.eigh(np.cov((In - c).T))[1][:, 0]          # smallest-variance direction
+        n = n if n[2] > 0 else -n
+        d = -n @ c
+    In = C[np.abs(C @ n + d) < tol]
+    rms = float(np.sqrt(np.mean((In @ n + d) ** 2)))
+    return n, float(d), rms, len(In) / len(P)
+
+
+def levelling(n, d):
+    """T (4x4) map -> room: turns the floor normal n to +z (smallest rotation) and puts the floor at z = 0."""
+    z = np.array([0.0, 0.0, 1.0])
+    v = np.cross(n, z)
+    s, c = np.linalg.norm(v), float(n @ z)
+    if s < 1e-12:
+        R = np.eye(3)
+    else:
+        k = v / s
+        Kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+        R = np.eye(3) + s * Kx + (1 - c) * Kx @ Kx
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[2, 3] = d                       # a floor point p (n.p = -d) goes to z = (R p)_z = n.p = -d -> shift by +d
+    return T
+
+
+def floor_from_points(P, window=0.03):
     """The lowest large horizontal layer of a room scan: floor height (m) and how much of the scan is in it."""
     P = P[np.isfinite(P).all(1)]
     z = P[:, 2]
@@ -136,18 +236,26 @@ def floor_from_points(P):
              if smooth[k] >= smooth[k - 1] and smooth[k] >= smooth[k + 1] and smooth[k] > 0.2 * smooth.max()]
     k = min(peaks)
     zc = (edges[k] + edges[k + 1]) / 2
-    near = np.abs(z - zc) < 0.03
+    near = np.abs(z - zc) < window
     return float(np.median(z[near])), float(near.mean())
 
 
 def main():
     a = parse()
     doc = yaml.safe_load(a.extrinsics.read_text())
-    if a.floor_pcd:
-        floor, share = floor_from_points(read_pcd(a.floor_pcd))
-        print(f"floor at z = {floor:.3f} m in the map ({100 * share:.0f}% of the scan within 3 cm of it)")
+    if a.floor_map:
+        n, d, rms, share = floor_plane(read_points(a.floor_map))
+        T_room_map = levelling(n, d)
+        tilt = np.degrees(np.arccos(n[2]))
+        slope = np.hypot(n[0], n[1]) / n[2]
+        print(f"floor plane: tilted {tilt:.2f} deg in the map ({100 * slope:.1f} cm per m, falling towards "
+              f"({n[0] / max(np.hypot(n[0], n[1]), 1e-12):+.2f}, {n[1] / max(np.hypot(n[0], n[1]), 1e-12):+.2f}) in x, y); "
+              f"height under the map origin {-d / n[2]:.3f} m; fit {1000 * rms:.0f} mm RMS over {100 * share:.0f}% of the scan")
+        floor_note = f"floor plane n = {np.round(n, 5).tolist()}, d = {d:.4f} (map frame), levelled"
     else:
-        floor = a.floor_z
+        T_room_map = np.eye(4)
+        T_room_map[2, 3] = -a.floor_z
+        floor_note = f"floor at z = {a.floor_z:.3f} in the map (no levelling)"
     cams, report = {}, []
     for tr in doc["transforms"]:
         name = tr["child"]
@@ -160,9 +268,10 @@ def main():
             print(f"{name}: no intrinsics (cam_{n}.json / .yaml) under {a.intrinsics}, left out")
             continue
         K, dist, w, h = read_intrinsics(ip)
-        T = np.eye(4)
-        T[:3, :3] = quat_to_R(tr["rotation_xyzw"])
-        T[:3, 3] = np.asarray(tr["translation"], float) - [0, 0, floor]
+        T_map_cam = np.eye(4)
+        T_map_cam[:3, :3] = quat_to_R(tr["rotation_xyzw"])
+        T_map_cam[:3, 3] = np.asarray(tr["translation"], float)
+        T = T_room_map @ T_map_cam
         cams[name] = {"K": K.round(4).tolist(), "dist": dist.round(6).tolist(), "width": w or 1920,
                       "height": h or 1080, "T_world_cam": T.round(6).tolist()}
         ax = T[:3, 2]
@@ -171,7 +280,8 @@ def main():
         report.append((name, T[2, 3], tilt, hit, ip.relative_to(a.intrinsics), K[0, 0]))
     a.out.parent.mkdir(parents=True, exist_ok=True)
     header = (f"# from {a.extrinsics}\n# intrinsics from {a.intrinsics}\n"
-              f"# room frame = the LiDAR map moved down by the floor height {floor:.3f} m: x, y as in the map, z up, floor z = 0\n")
+              f"# room frame = the LiDAR map, {floor_note}: z up, floor z = 0, x, y close to the map's\n"
+              f"# T_room_map: {np.round(T_room_map, 6).tolist()}\n")
     a.out.write_text(header + yaml.safe_dump({"cameras": cams}, sort_keys=False, default_flow_style=None))
     print(f"\n{'camera':8s} {'height m':>8s} {'tilt deg':>8s} {'looks at floor (x, y)':>22s} {'fx':>7s}  intrinsics")
     for name, z, tilt, hit, ip, fx in report:

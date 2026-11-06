@@ -96,7 +96,9 @@ python make_room_cameras.py --extrinsics .../mapping/cameras_ed305/cameras.yaml 
     --intrinsics .../raw/20261105/calibration --floor-pcd .../mapping/<map>.pcd
 ```
 
-It writes `configs/cameras_room.yaml` (use it as `--calib`) and prints each
+The floor is fitted as a plane, so a map that is slightly tilted (ED305's is
+about 1 deg, 19 cm over the room) is levelled too. It writes
+`configs/cameras_room.yaml` (use it as `--calib`) and prints the tilt, each
 camera's height above the floor (should be the mount height, about 2.5-2.7 m)
 and where it looks at on the floor. Without the map, `--floor-z` sets the
 floor height by hand. The other way to calibrate is the dashboard with floor
