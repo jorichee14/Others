@@ -1,0 +1,20 @@
+# Sensor models, entry zones and tracker settings for room_track.py (see TRACKING.md).
+# Every sensor that writes measurements needs an entry here; names match the CSV "sensor" column.
+# With --rec, the cameras' model ("cams") is made from the calibration; put it here only to override.
+sensors:
+  radar:                      # TI IWR6843 (after clustering points into one per person)
+    p_detect: 0.9             # moving people
+    p_detect_static: 0.05     # people sitting / standing still fade out of a Doppler radar
+    min_speed: 0.2            # m/s
+    clutter: 0.02             # false points per m^2 per scan
+    coverage:                 # where it sees: its field of view on the floor (room frame, metres)
+      polygon: [[-3.9, -4.9], [3.9, -4.9], [0.0, 2.0]]
+  robot_1:                    # the robot's own pose (LiDAR / visual localization), identity known
+    ident: robot_1
+    p_detect: 0.99
+    clutter: 1.0e-6
+zones:
+  entry:                      # where people come in and leave: the door (x, y, radius)
+    - circle: [-3.5, 4.8, 1.0]
+tracker:                      # any TrackerConfig field (ed305/tracking/tracker.py)
+  max_gap: 60

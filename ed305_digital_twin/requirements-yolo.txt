@@ -1,3 +1,5 @@
 # on top of requirements.txt, for prelabel.py and train_yolo.py (GPU machine)
 # install torch for your CUDA first (pytorch.org), then:
 ultralytics>=8.4
+lap>=0.5.12
+onnxruntime   # ReID appearance models (room_track.py --reid yolo26s-reid.onnx)

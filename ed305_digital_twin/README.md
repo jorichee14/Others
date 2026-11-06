@@ -5,7 +5,8 @@ Indoor Camera User Guide") for collaborative perception. The plan is
 [PLAN.md](PLAN.md); camera placement step by step is [WORKFLOW.md](WORKFLOW.md); what runs on the robots' Jetson Orin vs the server in the dynamic twin is
 [DATAFLOW.md](DATAFLOW.md); how to improve the Gaussian map's appearance without
 loosening the geometry is [APPEARANCE.md](APPEARANCE.md); fine-tuning YOLO on the cameras' recordings is
-[DETECTOR.md](DETECTOR.md). v1 so far: coverage / blind spots, placement within each mount's range, and measuring that range from video.
+[DETECTOR.md](DETECTOR.md); one identity per person from all cameras and other
+sensors is [TRACKING.md](TRACKING.md). v1 so far: coverage / blind spots, placement within each mount's range, and measuring that range from video.
 
 ```
 ed305/camera.py        pinhole camera in the room frame; loads cameras YAML
@@ -28,6 +29,10 @@ multiview_label.py     command line: person labels from all cameras at once (no 
 ed305/multiview.py     people from many calibrated views: association, misses, refutation
 fix_labels.py          window: correct boxes by hand (drag = new box, right click = delete)
 show_labels.py         command line: frames with their boxes drawn, a sheet per camera
+room_track.py          command line: room tracker, one identity per person from any sensors
+ed305/tracking/        sensor contract, tracker (tracklets + global linking), adapters, IDF1, simulated room
+configs/sensors_example.yaml   sensor models (radar, robot pose), the door, tracker settings
+configs/botsort_ed305.yaml     single-camera tracker settings (yolo track)
 make_dataset.py        command line: train / val split (by time or camera), data.yaml
 train_yolo.py          command line: fine-tune YOLO, compare with the pretrained model
 ed305/yolo_data.py     frame sampling, YOLO labels, class matching, the split
