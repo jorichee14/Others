@@ -2,6 +2,7 @@
 """Sample frames from the room cameras' recordings, for labelling.
 
     python extract_frames.py rec/cam_*.mp4 --out data/overhead
+    python extract_frames.py rec --out data/overhead               # every video in the folder
     python extract_frames.py rec/*.mp4 --out data/overhead --every 2 --max-per-video 300
 
 One frame per --every seconds, and only if enough of the picture changed since
@@ -15,6 +16,7 @@ Writes to --out:
   frames.csv   image, camera, video, t: what make_dataset.py splits on
 """
 import argparse
+import glob
 from pathlib import Path
 
 import cv2
@@ -24,7 +26,7 @@ from ed305.yolo_data import append_frames_csv, camera_of, read_frames_csv, sampl
 
 def parse():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("videos", nargs="+", type=Path)
+    ap.add_argument("videos", nargs="+", help="video files, folders of videos, or patterns like rec/cam_*.mp4")
     ap.add_argument("--out", type=Path, required=True, help="dataset folder")
     ap.add_argument("--every", type=float, default=1.0, help="seconds between samples (default 1)")
     ap.add_argument("--min-change", type=float, default=0.005,
@@ -34,8 +36,29 @@ def parse():
     return ap.parse_args()
 
 
+VIDEO_EXT = (".mp4", ".mkv", ".avi", ".mov")
+
+
+def expand(args):
+    """Files, folders and patterns -> video paths (Windows shells do not expand * themselves)."""
+    out = []
+    for a in args:
+        p = Path(a)
+        if p.is_dir():
+            out += sorted(q for q in p.iterdir() if q.suffix.lower() in VIDEO_EXT)
+        elif any(ch in a for ch in "*?["):
+            out += sorted(Path(q) for q in glob.glob(a))
+        else:
+            out.append(p)
+    missing = [str(p) for p in out if not p.is_file()]
+    if missing or not out:
+        raise SystemExit(f"no such video: {missing or args}")
+    return out
+
+
 def main():
     a = parse()
+    a.videos = expand(a.videos)
     img_dir = a.out / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
     done = {r["video"] for r in read_frames_csv(a.out)}
