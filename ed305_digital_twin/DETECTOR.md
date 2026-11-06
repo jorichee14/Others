@@ -106,6 +106,15 @@ over two people: fix those first (lower `--conf`, or correct more frames).
 
 ### 3. Review (the part that matters)
 
+Simplest: `fix_labels.py`, a window with the frame and its boxes (drag = new
+box, right click = delete, d = next). It writes `labels/` directly:
+
+```bash
+python fix_labels.py data/overhead              # the frames in val.txt
+```
+
+Or with a labelling tool:
+
 Training on raw pre-labels teaches the model the pre-labelling model's
 mistakes. Import `images/` + `labels/` + `classes.txt` into Label Studio
 (YOLO import) or CVAT (Ultralytics YOLO format), fix, export YOLO back into

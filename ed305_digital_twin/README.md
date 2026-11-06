@@ -26,6 +26,7 @@ extract_frames.py      command line: sample frames from recordings for labelling
 prelabel.py            command line: draft YOLO labels from a pretrained model
 multiview_label.py     command line: person labels from all cameras at once (no hand labels)
 ed305/multiview.py     people from many calibrated views: association, misses, refutation
+fix_labels.py          window: correct boxes by hand (drag = new box, right click = delete)
 show_labels.py         command line: frames with their boxes drawn, a sheet per camera
 make_dataset.py        command line: train / val split (by time or camera), data.yaml
 train_yolo.py          command line: fine-tune YOLO, compare with the pretrained model
