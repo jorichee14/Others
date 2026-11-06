@@ -152,6 +152,27 @@ Tested end to end on 16 rendered recordings (people cut from a real ED305 frame,
 each camera starting at a different time, real detector and ReID): every person
 one unbroken track. Not yet run on real recordings.
 
+## Trust values for the next steps (`persons_state.csv`)
+
+Disagreements are decided (assignments, the global linking, merging, box
+matching), but how close each decision was is kept and written out, so a
+planner or coordinator can act on how sure the room is:
+
+| column | meaning | use |
+|---|---|---|
+| `x, y, vx, vy` | position (m, room frame) and velocity | |
+| `sxx, sxy, syy`, `sigma_m` | position covariance: the filter's at the last report, widened with the time since (an unseen person may have moved); `sigma_m` its largest standard deviation | safety margins; seen people about 5 cm, unseen ones grow to metres |
+| `seen`, `age_s`, `views` | a report in the last 0.5 s; seconds since the last report; cameras that agreed on it | trust a fresh, many-view position more |
+| `link_conf` | confidence of the most recent identity decision: the chosen link against the best alternative (another tracklet, or a person ending and a new one starting), as a logistic of the cost difference | "is this still who it was a moment ago" |
+| `id_conf` | product of all link confidences so far | "is this the same person since the track began" |
+
+`boxes.csv` adds per camera box `label_conf` (how much better the box fits
+its person than the next-best one; low when people overlap in that view) and
+the detector's score.
+
+Checked on the simulated rooms: wrong identity links get median confidence
+0.40-0.69, right ones 0.72-1.00; seen people sigma about 5 cm, unseen about 1.5 m.
+
 ## Not yet
 
 - Live: stage 1 is online; stage 2 runs on the whole recording. Live use

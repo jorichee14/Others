@@ -110,6 +110,7 @@ class Tracklet:
         self.llr = self.peak = 0.0
         self.hits = 1
         self.sensors = {m.sensor}
+        self.link_conf = 1.0          # set by link_tracklets: how sure the link into this tracklet is
 
     @property
     def t0(self):
@@ -308,6 +309,31 @@ class Track:
     def measurements(self):
         return [k for tr in self.tracklets for k in tr.meas]
 
+    def state_at(self, times, cfg=None, seen_within=0.5):
+        """Position, velocity and how far to trust them, at times (inside the track).
+
+        -> dict of arrays: xy (N,2), v (N,2), cov (N,2,2) position covariance (the filter's at the last
+        report, widened with the time since: someone unseen may have moved), age (s since the last
+        report), seen (a report in the last seen_within s), id_conf (product of the link confidences
+        so far: how sure this id is still the person it started as), link_conf (the confidence of the
+        most recent link alone: is it still the person of a moment before that link)."""
+        cfg = cfg or TrackerConfig()
+        times = np.asarray(times, float)
+        t, x = self.samples()
+        P = np.concatenate([np.array(tr.Ps)[:, :2, :2] for tr in self.tracklets])
+        xy = self.position_at(times)
+        v = np.c_[np.interp(times, t, x[:, 2]), np.interp(times, t, x[:, 3])]
+        last = np.clip(np.searchsorted(t, times, side="right") - 1, 0, len(t) - 1)
+        age = np.clip(times - t[last], 0, None)
+        grow = np.minimum(cfg.wander ** 2 * age, cfg.wander_cap ** 2)
+        cov = P[last] + grow[:, None, None] * np.eye(2)
+        starts = np.array([tr.t0 for tr in self.tracklets])
+        each = np.array([tr.link_conf for tr in self.tracklets])
+        confs = np.cumprod(each)
+        k = np.clip(np.searchsorted(starts, times, side="right") - 1, 0, len(starts) - 1)
+        return {"xy": xy, "v": v, "cov": cov, "age": age, "seen": age <= seen_within, "id_conf": confs[k],
+                "link_conf": each[k]}
+
 
 def _link_cost(a, b, sensors, cfg):
     dt = b.t0 - a.t1
@@ -372,6 +398,18 @@ def link_tracklets(tracklets, sensors=None, zones=None, cfg=None, t_range=None):
     r, c = linear_sum_assignment(M)
     nxt = {a: b for a, b in zip(r, c) if a < n and b < n and M[a, b] < BIG / 2}
     has_prev = set(nxt.values())
+    # How sure each decision is: the chosen option against the best alternative for the same two ends
+    # (a's end going elsewhere, b's start coming from elsewhere, or a person ending and a new one starting).
+    sig = lambda x: float(1.0 / (1.0 + np.exp(-np.clip(x, -50, 50))))
+    for a, b in nxt.items():
+        row = np.delete(L[a], b)
+        col = np.delete(L[:, b], a)
+        alt = min(row.min() if len(row) else BIG, col.min() if len(col) else BIG, death[a] + birth[b])
+        T[b].link_conf = sig(alt - L[a, b])
+    for b in range(n):
+        if b not in has_prev:                       # a new person here, rather than someone seen before
+            best_in = L[:, b].min()
+            T[b].link_conf = sig(best_in - birth[b]) if best_in < BIG / 2 else 1.0
     tracks, k = [], 1
     for a in range(n):
         if a in has_prev:

@@ -98,3 +98,24 @@ tracker: {max_gap: 30}
     back = read_measurements_csv(tmp_path / "m.csv")
     assert np.allclose(back[0].xy, meas[0].xy, atol=1e-3) and np.allclose(back[0].cov, meas[0].cov, atol=1e-5)
     assert back[1].ident == "robot_1" and back[0].feat is not None and back[1].feat is None
+
+
+def test_trust_values_follow_the_evidence():
+    from collections import Counter
+    from ed305.tracking import build_tracklets, link_tracklets
+    meas, sensors, zones, gt = simulate("sparse", seed=0)
+    cfg = TrackerConfig()
+    tracks = link_tracklets(build_tracklets(meas, sensors, cfg), sensors, zones, cfg, (0, 120))
+    right, wrong, sig_seen, sig_unseen = [], [], [], []
+    for tk in tracks:
+        own = [Counter(meas[k].meta["truth"] for k in tr.meas if meas[k].meta["truth"]).most_common(1)[0][0]
+               for tr in tk.tracklets]
+        for o0, o1, tr in zip(own, own[1:], tk.tracklets[1:]):
+            (right if o0 == o1 else wrong).append(tr.link_conf)
+        S = tk.state_at(np.arange(tk.t0, tk.t1, 0.1), cfg)
+        sd = np.sqrt(np.linalg.eigvalsh(S["cov"]).max(1))
+        sig_seen += list(sd[S["seen"]])
+        sig_unseen += list(sd[~S["seen"]])
+    assert np.median(sig_seen) < 0.1 < np.median(sig_unseen)        # unseen people: less sure where they are
+    if wrong:
+        assert np.median(wrong) < np.median(right)                    # wrong identity links: less sure

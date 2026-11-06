@@ -38,6 +38,26 @@ class Person:
         k = np.argsort(t)
         return t[k], x[k]
 
+    def state_at(self, times, cfg=None, seen_within=0.5):
+        """Track.state_at() over the merged tracks: positions and velocities averaged, covariance the
+        smallest (the best-observed member), seen if any member is, id confidence the highest."""
+        S = [m.state_at(times, cfg, seen_within) for m in self.members]
+        if len(S) == 1:
+            return S[0]
+        xy = np.stack([s["xy"] for s in S])
+        inside = ~np.isnan(xy[..., 0])
+        with np.errstate(invalid="ignore"):
+            out = {"xy": np.nanmean(xy, 0), "v": np.nanmean(np.stack([np.where(inside[i][:, None], s["v"], np.nan)
+                                                                      for i, s in enumerate(S)]), 0)}
+        tr = np.stack([np.where(inside[i], np.trace(s["cov"], axis1=1, axis2=2), np.inf) for i, s in enumerate(S)])
+        best = tr.argmin(0)
+        out["cov"] = np.stack([S[b]["cov"][k] for k, b in enumerate(best)])
+        out["age"] = np.min([np.where(inside[i], s["age"], np.inf) for i, s in enumerate(S)], 0)
+        out["seen"] = np.any([inside[i] & s["seen"] for i, s in enumerate(S)], 0)
+        out["id_conf"] = np.max([np.where(inside[i], s["id_conf"], 0) for i, s in enumerate(S)], 0)
+        out["link_conf"] = np.max([np.where(inside[i], s["link_conf"], 0) for i, s in enumerate(S)], 0)
+        return out
+
     def seen_at(self, T, within=0.5):
         t = self.samples()[0]
         return bool(np.any((t <= T) & (t > T - within)))
@@ -98,21 +118,25 @@ def merge_colocated(tracks, meas=None, dist=0.6, min_overlap=1.0, step=0.2, seen
     return persons
 
 
-def label_boxes(grid, persons, T, boxes, min_iou=0.3, seen_within=1.0):
+def label_boxes(grid, persons, T, boxes, min_iou=0.3, seen_within=1.0, with_conf=False):
     """Labels for every camera's detections at time T.
 
-    boxes[c]: (M_c, 4) detections of camera c. -> [list of person id or None per detection, per camera].
+    boxes[c]: (M_c, 4) detections of camera c. -> [list of person id or None per detection, per camera]
+    (with_conf: also [list of confidences]: how much better the box fits its person than the
+    next-best person, 0 = just as well, 1 = no other person fits it at all).
     Only persons seen in the last `seen_within` s take part (a person carried over a long gap does
     not take someone else's box)."""
     act = [p for p in persons if p.t0 <= T <= p.t1 and p.seen_at(T, seen_within)]
     out = [[None] * len(b) for b in boxes]
+    conf = [[0.0] * len(b) for b in boxes]
+    ret = (lambda: (out, conf)) if with_conf else (lambda: out)
     if not act:
-        return out
+        return ret()
     pos = np.array([p.position_at([T])[0] for p in act])
     ok = ~np.isnan(pos[:, 0])
     act, pos = [p for p, k in zip(act, ok) if k], pos[ok]
     if not act:
-        return out
+        return ret()
     cells, inside = grid.cells(pos)
     for c, b in enumerate(boxes):
         b = np.asarray(b, float).reshape(-1, 4)
@@ -125,4 +149,6 @@ def label_boxes(grid, persons, T, boxes, min_iou=0.3, seen_within=1.0):
         for i, j in zip(r, k):
             if I[i, j] >= min_iou:
                 out[c][i] = act[j].id
-    return out
+                second = np.max(np.delete(I[i], j)) if I.shape[1] > 1 else 0.0
+                conf[c][i] = float(np.clip((I[i, j] - second) / I[i, j], 0, 1))
+    return ret()

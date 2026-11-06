@@ -19,6 +19,10 @@ Writes to --out:
   tracks.csv        track, t, x, y, vx, vy: every person's path in the room frame
   measurements.csv  every measurement with the track it was given (empty: clutter)
   persons.csv       (cameras) which tracks are one person (tracks staying at the same spot are merged)
+  persons_state.csv per person, every 1/--rate s: x, y, vx, vy, position covariance (sxx sxy syy;
+                    sigma_m its largest std), seen, age_s since the last report, views (cameras
+                    agreeing), id_conf (how sure the id is the same person since the track began),
+                    link_conf (how sure the most recent identity decision was): for planners
   boxes.csv         (cameras) t, camera, x0, y0, x1, y1, person: every detection, labelled from the
                     persons' positions (the same id in every camera)
   <cam>_ids.mp4     (--video cam_3) that camera with the room identities drawn
@@ -228,26 +232,56 @@ def floor_plan(tracks, cams, bounds, T, h=864, seen_within=0.5):
 
 
 def labelled_boxes(a, cams, persons, min_conf=0.4):
-    """{(t, camera): [(box, person id or None)]}: every detection labelled from the persons' positions
-    (unlabelled ones only if the detector was fairly sure)."""
+    """{(t, camera): [(box, person id or None, label confidence, detector score)]}: every detection
+    labelled from the persons' positions (unlabelled ones only if the detector was fairly sure)."""
     from ed305.tracking.relabel import label_boxes
     by = {}
     for T, (boxes, confs) in a.detections.items():
-        labels = label_boxes(a.grid, persons, T, boxes)
+        labels, lconf = label_boxes(a.grid, persons, T, boxes, with_conf=True)
         for c, cam in enumerate(cams):
-            for b, cf, lab in zip(boxes[c], confs[c], labels[c]):
+            for b, cf, lab, lc in zip(boxes[c], confs[c], labels[c], lconf[c]):
                 if lab is not None or cf >= min_conf:
-                    by.setdefault((T, cam.name), []).append((b, lab))
+                    by.setdefault((T, cam.name), []).append((b, lab, lc, cf))
     return by
 
 
 def write_boxes(a, by):
     with open(a.out / "boxes.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["t", "camera", "x0", "y0", "x1", "y1", "person"])
+        w.writerow(["t", "camera", "x0", "y0", "x1", "y1", "person", "label_conf", "det_score"])
         for (T, cam), items in sorted(by.items()):
-            for b, lab in items:
-                w.writerow([f"{T:.3f}", cam, *(f"{v:.1f}" for v in b), lab or ""])
+            for b, lab, lc, cf in items:
+                w.writerow([f"{T:.3f}", cam, *(f"{v:.1f}" for v in b), lab or "", f"{lc:.2f}", f"{cf:.2f}"])
+
+
+def write_person_states(a, persons, meas, times, cfg):
+    """persons_state.csv: per person, on a regular time grid, where they are and how far to trust it."""
+    with open(a.out / "persons_state.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["person", "t", "x", "y", "vx", "vy", "sxx", "sxy", "syy", "sigma_m", "seen", "age_s",
+                    "views", "id_conf", "link_conf"])
+        for p in persons:
+            ts = times[(times >= p.t0) & (times <= p.t1)]
+            if not len(ts):
+                continue
+            S = p.state_at(ts, cfg)
+            vt, vn = [], []                                   # views of each report: cameras agreeing (or 1)
+            for m in getattr(p, "members", [p]):
+                for k in m.measurements:
+                    vt.append(meas[k].t)
+                    vn.append(len((meas[k].meta or {}).get("boxes") or {}) or 1)
+            order = np.argsort(vt)
+            vt, vn = np.array(vt)[order], np.array(vn)[order]
+            for i, t in enumerate(ts):
+                if np.isnan(S["xy"][i, 0]):
+                    continue
+                j = np.searchsorted(vt, t, side="right") - 1
+                views = int(vn[j]) if j >= 0 and t - vt[j] <= 0.5 else 0
+                C = S["cov"][i]
+                w.writerow([p.id, f"{t:.3f}", f"{S['xy'][i, 0]:.3f}", f"{S['xy'][i, 1]:.3f}", f"{S['v'][i, 0]:.3f}",
+                            f"{S['v'][i, 1]:.3f}", f"{C[0, 0]:.5f}", f"{C[0, 1]:.5f}", f"{C[1, 1]:.5f}",
+                            f"{np.sqrt(np.linalg.eigvalsh(C).max()):.3f}", int(S["seen"][i]), f"{S['age'][i]:.2f}",
+                            views, f"{S['id_conf'][i]:.3f}", f"{S['link_conf'][i]:.3f}"])
 
 
 def render_all(a, cams, videos, steps, by, persons):
@@ -267,8 +301,8 @@ def render_all(a, cams, videos, steps, by, persons):
             img = tile(f, size, f"{c.name}   t {T:7.2f} s")
             items = by.get((round(float(T), 3), c.name), [])
             if f is not None and items:
-                draw_boxes(img, [b for b, _ in items], labels=[tid or "?" for _, tid in items],
-                           colors=[color(tid) if tid else (150, 150, 150) for _, tid in items], scale=size[0] / f.shape[1])
+                draw_boxes(img, [it[0] for it in items], labels=[it[1] or "?" for it in items],
+                           colors=[color(it[1]) if it[1] else (150, 150, 150) for it in items], scale=size[0] / f.shape[1])
             tiles.append(img)
         g = grid(tiles, cols, size)
         out = even(np.hstack([g, floor_plan(persons, cams, a.bounds_used, float(T), h=g.shape[0])]))
@@ -294,7 +328,7 @@ def render(a, cams, videos, steps, by):
         f = v.at(T)
         if f is None:
             continue
-        for b, tid in by_t.get(round(float(T), 3), []):
+        for b, tid, *_ in by_t.get(round(float(T), 3), []):
             col = color(tid) if tid else (150, 150, 150)
             cv2.rectangle(f, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), col, 3)
             cv2.putText(f, tid or "?", (int(b[0]), int(b[1]) - 8), cv2.FONT_HERSHEY_SIMPLEX, 1.0, col, 2)
@@ -336,8 +370,8 @@ def main():
                 f"{base['switches']} | {base['pred_ids']} |\n"
                 f"| room tracker (stage 1 + 2) | {m['IDF1']:.3f} | {m['IDP']:.3f} | {m['IDR']:.3f} | "
                 f"{m['switches']} | {m['pred_ids']} |\n\n") + text
+    from ed305.tracking.relabel import Person, merge_colocated
     if cams is not None:
-        from ed305.tracking.relabel import merge_colocated
         persons = merge_colocated(tracks, meas)
         with open(a.out / "persons.csv", "w", newline="") as f:
             w = csv.writer(f)
@@ -349,6 +383,12 @@ def main():
         write_boxes(a, by)
         text += (f"{len(persons)} persons after merging tracks that stay at the same spot "
                  f"(persons.csv); camera boxes labelled from the persons' positions (boxes.csv).\n")
+    else:
+        persons = [Person(tk.id, [tk]) for tk in tracks]
+    t_lo = min(m.t for m in meas)
+    t_hi = max(m.t for m in meas)
+    write_person_states(a, persons, meas, np.round(np.arange(t_lo, t_hi + 1e-9, 1.0 / a.rate), 3), cfg)
+    text += "per-person state with trust values: persons_state.csv\n"
     (a.out / "summary.md").write_text(text)
     print(text)
     if a.video:
