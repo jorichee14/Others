@@ -29,6 +29,7 @@ multiview_label.py     command line: person labels from all cameras at once (no 
 ed305/multiview.py     people from many calibrated views: association, misses, refutation
 fix_labels.py          window: correct boxes by hand (drag = new box, right click = delete)
 show_labels.py         command line: frames with their boxes drawn, a sheet per camera
+make_room_cameras.py   command line: cameras in the LiDAR map + intrinsics + floor height -> configs/cameras_room.yaml
 motion_sync.py         command line: recordings on one clock from the motion the cameras see (no flash)
 mosaic.py              command line: all cameras in one video on the common clock (+ detections / tracking)
 ed305/sync.py          motion signals, pairwise offsets, the global fit

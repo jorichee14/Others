@@ -83,8 +83,26 @@ pair is mixed up there.
 
 ## On ED305 data
 
-Needs: the cameras calibrated in the room frame (`cameras.json`, floor z = 0)
-and the recordings on one clock (`cam_N_times.csv` next to each video). Two ways
+Needs: the cameras calibrated in one room frame with the floor at z = 0, and
+the recordings on one clock.
+
+Cameras calibrated in the robot's LiDAR map (`mapping/cameras_ed305/cameras.yaml`,
+T_map_cam per camera): the map's origin is where the LiDAR started, not the
+floor, and the lens calibration is in separate files. `make_room_cameras.py`
+puts them together, finding the floor in the LiDAR map:
+
+```bash
+python make_room_cameras.py --extrinsics .../mapping/cameras_ed305/cameras.yaml \
+    --intrinsics .../raw/20261105/calibration --floor-pcd .../mapping/<map>.pcd
+```
+
+It writes `configs/cameras_room.yaml` (use it as `--calib`) and prints each
+camera's height above the floor (should be the mount height, about 2.5-2.7 m)
+and where it looks at on the floor. Without the map, `--floor-z` sets the
+floor height by hand. The other way to calibrate is the dashboard with floor
+tags (`results/extrinsics/cameras.json`, already floor z = 0).
+
+The recordings on one clock (`cam_N_times.csv` next to each video). Two ways
 to get the times files:
 
 | | how | when |
