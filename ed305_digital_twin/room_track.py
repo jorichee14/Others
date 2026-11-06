@@ -164,36 +164,70 @@ def color(tid):
     return c(tid)
 
 
-def floor_plan(tracks, cams, bounds, T, h=864, trail=3.0):
-    """The room from above at time T: cameras, every track's position, its last `trail` seconds."""
+def floor_plan(tracks, cams, bounds, T, h=864, trail=3.0, seen_within=0.5):
+    """The room from above at time T, to scale: cameras, every track as a small dot (about a
+    person's size) with its last `trail` seconds; a ring when it was not seen in the last
+    `seen_within` s (position carried over a gap)."""
     x0, x1, y0, y1 = bounds
-    pad = 0.5
-    s = (h - 40) / (y1 - y0 + 2 * pad)
+    pad = 0.4
+    w = int(h * (x1 - x0 + 2 * pad) / (y1 - y0 + 2 * pad))
+    w = min(w, int(h * 1.3))
+    s = min((h - 30) / (y1 - y0 + 2 * pad), w / (x1 - x0 + 2 * pad))
     w = int((x1 - x0 + 2 * pad) * s)
-    img = np.full((h, w, 3), 245, np.uint8)
-    px = lambda x, y: (int((x - x0 + pad) * s), int((y1 + pad - y) * s) + 30)
+    img = np.full((h, w, 3), 248, np.uint8)
+    top = max(26, int((h - (y1 - y0 + 2 * pad) * s) / 2))                 # the room centred vertically
+    px = lambda x, y: (int((x - x0 + pad) * s), int((y1 + pad - y) * s) + top)
     for gx in np.arange(np.ceil(x0), x1 + 1e-9):
-        cv2.line(img, px(gx, y0), px(gx, y1), (225, 225, 225), 1)
+        cv2.line(img, px(gx, y0), px(gx, y1), (232, 232, 232), 1)
     for gy in np.arange(np.ceil(y0), y1 + 1e-9):
-        cv2.line(img, px(x0, gy), px(x1, gy), (225, 225, 225), 1)
-    cv2.rectangle(img, px(x0, y1), px(x1, y0), (120, 120, 120), 2)
+        cv2.line(img, px(x0, gy), px(x1, gy), (232, 232, 232), 1)
+    cv2.rectangle(img, px(x0, y1), px(x1, y0), (150, 150, 150), 1)
     for c in cams:
-        cv2.circle(img, px(*c.center[:2]), 5, (90, 90, 90), -1)
-        cv2.putText(img, c.name.replace("cam_", ""), px(c.center[0] + 0.1, c.center[1] + 0.1),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (90, 90, 90), 1, cv2.LINE_AA)
+        cv2.drawMarker(img, px(*c.center[:2]), (120, 120, 120), cv2.MARKER_TRIANGLE_UP, 8, 1)
+        cv2.putText(img, c.name.replace("cam_", ""), px(c.center[0] + 0.08, c.center[1] + 0.08),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (120, 120, 120), 1, cv2.LINE_AA)
+    n_here, placed = 0, []
+    font, fs, th = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+    items = []
     for tk in tracks:
         if not (tk.t0 <= T <= tk.t1):
             continue
-        ts = np.linspace(max(tk.t0, T - trail), T, 20)
+        ts = np.linspace(max(tk.t0, T - trail), T, 15)
         P = tk.position_at(ts)
         P = P[~np.isnan(P[:, 0])]
         if not len(P):
             continue
-        col = color(tk.id)
-        cv2.polylines(img, [np.array([px(*p) for p in P], np.int32)], False, col, 2, cv2.LINE_AA)
-        cv2.circle(img, px(*P[-1]), max(5, int(0.25 * s)), col, -1, cv2.LINE_AA)
-        cv2.putText(img, tk.id, px(P[-1][0] + 0.3, P[-1][1] + 0.3), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2, cv2.LINE_AA)
-    cv2.putText(img, f"room, t {T:.1f} s", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 60, 60), 1, cv2.LINE_AA)
+        t_upd = tk.samples()[0]
+        seen = bool(np.any((t_upd <= T) & (t_upd > T - seen_within)))
+        items.append((tk.id, P, seen))
+    for tid, P, seen in items:                                  # trails first, under every tag
+        cv2.polylines(img, [np.array([px(*p) for p in P], np.int32)], False, color(tid), 1, cv2.LINE_AA)
+    for tid, P, seen in items:
+        col = color(tid)
+        x, y = px(*P[-1])
+        cv2.circle(img, (x, y), 2, col, -1, cv2.LINE_AA)
+        (tw, tht), _ = cv2.getTextSize(tid, font, fs, th)
+        box = None
+        offsets = [(6, -6), (6, tht + 6), (-tw - 6, -6), (-tw - 6, tht + 6), (6, -tht - 12), (-tw // 2, -14),
+                   (-tw // 2, tht + 14)]
+        offsets += [(int(r * np.cos(a)) - tw // 2, int(r * np.sin(a)) + tht // 2)          # further out, all around
+                    for r in (28, 42, 56) for a in np.linspace(0, 2 * np.pi, 12, endpoint=False)]
+        for dx, dy in offsets:
+            b = (x + dx - 2, y + dy - tht - 2, x + dx + tw + 2, y + dy + 4)
+            if not any(b[0] < q[2] and q[0] < b[2] and b[1] < q[3] and q[1] < b[3] for q in placed):
+                box = b
+                break
+        box = box or (x + 6 - 2, y - 6 - tht - 2, x + 6 + tw + 2, y - 6 + 4)
+        placed.append(box)
+        cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+        if abs(cx - x) > tw or abs(cy - y) > 2 * tht:              # tag moved away: a thin line to its spot
+            cv2.line(img, (x, y), (min(max(x, box[0]), box[2]), min(max(y, box[1]), box[3])), col, 1, cv2.LINE_AA)
+        cv2.rectangle(img, box[:2], box[2:], (255, 255, 255) if seen else (240, 240, 240), -1)
+        cv2.rectangle(img, box[:2], box[2:], col, 1)
+        cv2.putText(img, tid, (box[0] + 2, box[3] - 4), font, fs, col if seen else (150, 150, 150), th, cv2.LINE_AA)
+        n_here += seen
+    cv2.putText(img, f"t {T:.1f} s   seen now: {n_here}", (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (80, 80, 80), 1,
+                cv2.LINE_AA)
     return img
 
 
