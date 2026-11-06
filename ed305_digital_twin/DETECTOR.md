@@ -95,6 +95,15 @@ Writes `labels/<stem>.txt` for frames that have none (never overwrites one,
 it may be reviewed). COCO has no robot: draw those by hand in round 1.
 `review.csv` lists frames with the most unsure boxes first.
 
+Look at them before going on (5 minutes):
+
+```bash
+python show_labels.py data/overhead          # check/<camera>.jpg, check/unsure.jpg
+```
+
+A camera where people are always missed, boxes on chairs or screens, one box
+over two people: fix those first (lower `--conf`, or correct more frames).
+
 ### 3. Review (the part that matters)
 
 Training on raw pre-labels teaches the model the pre-labelling model's
