@@ -114,7 +114,12 @@ At least the val frames must be reviewed (see 4).
 ```bash
 python make_dataset.py data/overhead                           # by time: last 20% of each video
 python make_dataset.py data/overhead --val-cameras cam_3,cam_12    # by camera
+python make_dataset.py data/overhead --val-cameras cam_3,cam_12 --val-frames 300   # only 300 val frames
 ```
+
+`--val-frames` keeps that many val frames, evenly spread over time: those
+are the ones to correct by hand (listed in `val.txt`); the rest of the val
+cameras' frames are not used, so the val cameras stay unseen in training.
 
 Never a random split: frames a second apart are near copies, so val would be
 in train too. By camera answers "does it work on a camera it never saw"; by

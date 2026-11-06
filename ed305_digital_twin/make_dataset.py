@@ -3,6 +3,7 @@
 
     python make_dataset.py data/overhead                          # last 20% of each video is val
     python make_dataset.py data/overhead --val-cameras cam_3,cam_12   # those cameras are val
+    python make_dataset.py data/overhead --val-cameras cam_3,cam_12 --val-frames 300   # 300 of them, to check by hand
 
 Split by time or by camera, never frame by frame: frames a second apart are
 near copies, so a random split puts the val frames in train too and the val
@@ -20,6 +21,7 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 from ed305.yolo_data import read_frames_csv, read_labels, split_rows
@@ -31,6 +33,9 @@ def parse():
     ap.add_argument("--val-cameras", default="", help="comma-separated cameras held out as val")
     ap.add_argument("--val-frac", type=float, default=0.2, help="by time: share of each video for val (default 0.2)")
     ap.add_argument("--gap", type=float, default=10.0, help="by time: seconds left out before val (default 10)")
+    ap.add_argument("--val-frames", type=int,
+                    help="keep only this many val frames, evenly spread over time (the ones to correct by hand); "
+                         "the other val frames are not used at all")
     return ap.parse_args()
 
 
@@ -47,6 +52,12 @@ def main():
     if unknown:
         raise SystemExit(f"no labelled frames from {sorted(unknown)}")
     split = split_rows(labelled, val_cams, a.val_frac, a.gap)
+    if a.val_frames:
+        val = sorted((i for i, s in enumerate(split) if s == "val"),
+                     key=lambda i: (labelled[i]["video"], labelled[i]["t"]))
+        if len(val) > a.val_frames:
+            keep = {val[int(k)] for k in np.linspace(0, len(val) - 1, a.val_frames)}
+            split = ["skip" if s == "val" and i not in keep else s for i, s in enumerate(split)]
 
     lists = {"train": [], "val": []}
     cams = {"train": Counter(), "val": Counter()}
@@ -70,7 +81,7 @@ def main():
         per_cls = ", ".join(f"{classes[c]} {n}" for c, n in sorted(boxes[s].items())) or "no boxes"
         per_cam = ", ".join(f"{c} {n}" for c, n in sorted(cams[s].items()))
         print(f"{s}: {len(lists[s])} frames ({per_cls})\n  {per_cam}")
-    print(f"skipped (gap): {split.count('skip')}\n{root / 'data.yaml'}")
+    print(f"left out (gap, or val beyond --val-frames): {split.count('skip')}\n{root / 'data.yaml'}")
 
 
 if __name__ == "__main__":
