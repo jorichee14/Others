@@ -133,8 +133,17 @@ python room_track.py --rec rec/ --calib results/extrinsics/cameras.json \
     --sensors configs/sensors_example.yaml --video cam_3 --out out/run1
 ```
 
-Outputs `tracks.csv` (paths in metres), `boxes.csv` (every camera box with its
-room identity), `cam_3_ids.mp4` (`--video all`: `all_ids.mp4`, every camera in
+After tracking, two steps make the identities in the videos steady:
+duplicates are merged into one person (`ed305/tracking/relabel.py`: two tracks
+that stay close while the cameras split between them, i.e. each camera's box of
+that person went to one or the other; two real people side by side are seen by
+the same cameras and stay two), and every camera's detections are labelled from
+the persons' smoothed positions (expected box per camera, one assignment per
+camera), so a person has the same id in every camera and a box's id does not
+change with each instant's grouping.
+
+Outputs `tracks.csv` (paths in metres), `persons.csv` (which tracks are one
+person), `boxes.csv` (every camera box with its person id), `cam_3_ids.mp4` (`--video all`: `all_ids.mp4`, every camera in
 one grid with the room identities + the floor plan with everyone's path),
 `summary.md`. Other sensors join with
 `--measurements radar.csv robot_1.csv` and their models in `--sensors`.

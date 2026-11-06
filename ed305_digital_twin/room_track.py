@@ -18,7 +18,9 @@ The 16 cameras (calibrated, synced recordings, as multiview_label.py), plus othe
 Writes to --out:
   tracks.csv        track, t, x, y, vx, vy: every person's path in the room frame
   measurements.csv  every measurement with the track it was given (empty: clutter)
-  boxes.csv         (cameras) t, camera, x0, y0, x1, y1, track: each camera box with the room identity
+  persons.csv       (cameras) which tracks are one person (tracks staying at the same spot are merged)
+  boxes.csv         (cameras) t, camera, x0, y0, x1, y1, person: every detection, labelled from the
+                    persons' positions (the same id in every camera)
   <cam>_ids.mp4     (--video cam_3) that camera with the room identities drawn
   all_ids.mp4       (--video all) every camera in one grid + the floor plan with everyone's path
   summary.md        tracks, how long, which sensors; with --sim also the identity scores
@@ -97,6 +99,7 @@ def camera_measurements(a, out):
     t1 = min(v.t[-1] for v in videos) if a.end is None else a.end
     steps = np.arange(t0, t1, 1.0 / a.rate)
     meas = []
+    a.detections = {}
     for k, T in enumerate(steps):
         frames = [v.at(T) for v in videos]
         idx = [c for c, f in enumerate(frames) if f is not None]
@@ -109,6 +112,7 @@ def camera_measurements(a, out):
         for c, r in zip(idx, res):
             boxes[c] = r.boxes.xyxy.cpu().numpy().astype(float)
             confs[c] = r.boxes.conf.cpu().numpy().astype(float)
+        a.detections[round(float(T), 3)] = (boxes, confs)
         sup = support(grid, boxes, 0.4)
         people = associate(grid, boxes, confs, a.min_views, 0.8, 0.4, sup)
         feats = None
@@ -128,6 +132,7 @@ def camera_measurements(a, out):
     print()
     area = (bounds[1] - bounds[0]) * (bounds[3] - bounds[2])
     a.bounds_used = bounds
+    a.grid = grid
     return meas, camera_sensor(grid, a.min_views, clutter=0.2 / area), cams, videos, steps
 
 
@@ -142,14 +147,6 @@ def write_outputs(a, meas, tracks, owner, sensors):
             for ti, xi in zip(t, x):
                 w.writerow([tk.id, f"{ti:.3f}", f"{xi[0]:.3f}", f"{xi[1]:.3f}", f"{xi[2]:.3f}", f"{xi[3]:.3f}"])
     write_measurements_csv(out / "measurements.csv", meas, owner)
-    cam_boxes = [(k, m) for k, m in enumerate(meas) if m.meta.get("boxes")]
-    if cam_boxes:
-        with open(out / "boxes.csv", "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["t", "camera", "x0", "y0", "x1", "y1", "track"])
-            for k, m in cam_boxes:
-                for cam, b in m.meta["boxes"].items():
-                    w.writerow([f"{m.t:.3f}", cam, *(f"{v:.1f}" for v in b), owner.get(k, "")])
 
 
 def summary(tracks, meas, owner):
@@ -167,10 +164,9 @@ def color(tid):
     return c(tid)
 
 
-def floor_plan(tracks, cams, bounds, T, h=864, trail=3.0, seen_within=0.5):
-    """The room from above at time T, to scale: cameras, every track as a small dot (about a
-    person's size) with its last `trail` seconds; a ring when it was not seen in the last
-    `seen_within` s (position carried over a gap)."""
+def floor_plan(tracks, cams, bounds, T, h=864, seen_within=0.5):
+    """The room from above at time T, to scale: cameras, and every person's id tag at their spot
+    (grey when not seen in the last `seen_within` s: position carried over a gap)."""
     x0, x1, y0, y1 = bounds
     pad = 0.4
     w = int(h * (x1 - x0 + 2 * pad) / (y1 - y0 + 2 * pad))
@@ -195,16 +191,13 @@ def floor_plan(tracks, cams, bounds, T, h=864, trail=3.0, seen_within=0.5):
     for tk in tracks:
         if not (tk.t0 <= T <= tk.t1):
             continue
-        ts = np.linspace(max(tk.t0, T - trail), T, 15)
-        P = tk.position_at(ts)
+        P = tk.position_at([T])
         P = P[~np.isnan(P[:, 0])]
         if not len(P):
             continue
         t_upd = tk.samples()[0]
         seen = bool(np.any((t_upd <= T) & (t_upd > T - seen_within)))
         items.append((tk.id, P, seen))
-    for tid, P, seen in items:                                  # trails first, under every tag
-        cv2.polylines(img, [np.array([px(*p) for p in P], np.int32)], False, color(tid), 1, cv2.LINE_AA)
     for tid, P, seen in items:
         col = color(tid)
         x, y = px(*P[-1])
@@ -234,17 +227,36 @@ def floor_plan(tracks, cams, bounds, T, h=864, trail=3.0, seen_within=0.5):
     return img
 
 
-def render_all(a, cams, videos, steps, meas, owner, tracks):
+def labelled_boxes(a, cams, persons, min_conf=0.4):
+    """{(t, camera): [(box, person id or None)]}: every detection labelled from the persons' positions
+    (unlabelled ones only if the detector was fairly sure)."""
+    from ed305.tracking.relabel import label_boxes
+    by = {}
+    for T, (boxes, confs) in a.detections.items():
+        labels = label_boxes(a.grid, persons, T, boxes)
+        for c, cam in enumerate(cams):
+            for b, cf, lab in zip(boxes[c], confs[c], labels[c]):
+                if lab is not None or cf >= min_conf:
+                    by.setdefault((T, cam.name), []).append((b, lab))
+    return by
+
+
+def write_boxes(a, by):
+    with open(a.out / "boxes.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["t", "camera", "x0", "y0", "x1", "y1", "person"])
+        for (T, cam), items in sorted(by.items()):
+            for b, lab in items:
+                w.writerow([f"{T:.3f}", cam, *(f"{v:.1f}" for v in b), lab or ""])
+
+
+def render_all(a, cams, videos, steps, by, persons):
     """Every camera in one grid with the room identities, and the floor plan on the right."""
     import math
     from mosaic import draw_boxes, even, grid, tile
     from multiview_label import SyncedVideo
     size = (480, 270)
     vs = [SyncedVideo(v.path) for v in videos]
-    by = {}
-    for k, m in enumerate(meas):
-        for cam, b in (m.meta.get("boxes") or {}).items():
-            by.setdefault((round(m.t, 3), cam), []).append((b, owner.get(k)))
     cols = math.ceil(math.sqrt(len(cams)))
     path = a.out / "all_ids.mp4"
     vw = None
@@ -259,7 +271,7 @@ def render_all(a, cams, videos, steps, meas, owner, tracks):
                            colors=[color(tid) if tid else (150, 150, 150) for _, tid in items], scale=size[0] / f.shape[1])
             tiles.append(img)
         g = grid(tiles, cols, size)
-        out = even(np.hstack([g, floor_plan(tracks, cams, a.bounds_used, float(T), h=g.shape[0])]))
+        out = even(np.hstack([g, floor_plan(persons, cams, a.bounds_used, float(T), h=g.shape[0])]))
         if vw is None:
             vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), a.rate, (out.shape[1], out.shape[0]))
         vw.write(out)
@@ -268,18 +280,14 @@ def render_all(a, cams, videos, steps, meas, owner, tracks):
     print(f"video: {path}")
 
 
-def render(a, cams, videos, steps, meas, owner):
+def render(a, cams, videos, steps, by):
     names = [c.name for c in cams]
     if a.video not in names:
         raise SystemExit(f"--video {a.video}: not one of {names}")
     c = names.index(a.video)
     from multiview_label import SyncedVideo
     v = SyncedVideo(videos[c].path)
-    by_t = {}
-    for k, m in enumerate(meas):
-        b = m.meta.get("boxes", {}).get(a.video)
-        if b is not None:
-            by_t.setdefault(round(m.t, 3), []).append((b, owner.get(k)))
+    by_t = {T: items for (T, cam), items in by.items() if cam == a.video}
     path = a.out / f"{a.video}_ids.mp4"
     vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), a.rate, v.size)
     for T in steps:
@@ -328,15 +336,28 @@ def main():
                 f"{base['switches']} | {base['pred_ids']} |\n"
                 f"| room tracker (stage 1 + 2) | {m['IDF1']:.3f} | {m['IDP']:.3f} | {m['IDR']:.3f} | "
                 f"{m['switches']} | {m['pred_ids']} |\n\n") + text
+    if cams is not None:
+        from ed305.tracking.relabel import merge_colocated
+        persons = merge_colocated(tracks, meas)
+        with open(a.out / "persons.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["track", "person"])
+            for p in persons:
+                for m in p.members:
+                    w.writerow([m.id, p.id])
+        by = labelled_boxes(a, cams, persons)
+        write_boxes(a, by)
+        text += (f"{len(persons)} persons after merging tracks that stay at the same spot "
+                 f"(persons.csv); camera boxes labelled from the persons' positions (boxes.csv).\n")
     (a.out / "summary.md").write_text(text)
     print(text)
     if a.video:
         if cams is None:
             raise SystemExit("--video needs --rec")
         if a.video == "all":
-            render_all(a, cams, videos, steps, meas, owner, tracks)
+            render_all(a, cams, videos, steps, by, persons)
         else:
-            render(a, cams, videos, steps, meas, owner)
+            render(a, cams, videos, steps, by)
 
 
 if __name__ == "__main__":

@@ -72,6 +72,7 @@ class Grid:
         xs = np.arange(x0 + step / 2, x1, step)
         ys = np.arange(y0 + step / 2, y1, step)
         gx, gy = np.meshgrid(xs, ys)
+        self.xs, self.ys = xs, ys
         self.xy = np.stack([gx.ravel(), gy.ravel()], 1)
         self.cams, self.shapes, self.step = cams, shapes, step
         C, S, N = len(cams), len(shapes), len(self.xy)
@@ -101,6 +102,14 @@ class Grid:
                     vis = valid & (area(clip) > MIN_VISIBLE * area(b))
                 self.boxes[c, s, vis] = clip[vis]
                 self.full[c, s] = vis & inside.all(1)
+
+    def cells(self, xy):
+        """Nearest cell index for floor points xy (N, 2), and whether they are on the grid."""
+        xy = np.atleast_2d(np.asarray(xy, float))
+        ix = np.round((xy[:, 0] - self.xs[0]) / self.step).astype(int)
+        iy = np.round((xy[:, 1] - self.ys[0]) / self.step).astype(int)
+        inside = (ix >= 0) & (ix < len(self.xs)) & (iy >= 0) & (iy < len(self.ys))
+        return np.clip(iy, 0, len(self.ys) - 1) * len(self.xs) + np.clip(ix, 0, len(self.xs) - 1), inside
 
     @staticmethod
     def _r2_lim(cam):
