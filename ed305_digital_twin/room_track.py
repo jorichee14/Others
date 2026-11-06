@@ -89,7 +89,10 @@ def camera_measurements(a, out):
     enc = None
     if a.reid:
         from ultralytics.trackers.utils.reid import ReID
-        enc = ReID(a.reid, device=a.device)
+        dev = a.device
+        if dev is not None and str(dev).split(",")[0].strip().isdigit():
+            dev = f"cuda:{str(dev).split(',')[0].strip()}"         # the detector takes 0, the ReID model cuda:0
+        enc = ReID(a.reid, device=dev)
     t0 = max(v.t[0] for v in videos) if a.start is None else a.start
     t1 = min(v.t[-1] for v in videos) if a.end is None else a.end
     steps = np.arange(t0, t1, 1.0 / a.rate)
