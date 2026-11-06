@@ -38,7 +38,8 @@ def parse():
     ap.add_argument("--max-lag", type=float, default=10.0, help="largest offset searched (s, default 10)")
     ap.add_argument("--min-conf", type=float, default=6.0, help="pairs below this confidence are not used")
     ap.add_argument("--tol", type=float, default=0.05, help="pairs disagreeing more (s) are dropped")
-    ap.add_argument("--check-drift", action="store_true", help="also fit the first and second half separately")
+    ap.add_argument("--check-drift", action="store_true",
+                    help="also fit the next --seconds of video and compare (reads twice as much)")
     ap.add_argument("--workers", type=int, default=4)
     return ap.parse_args()
 
@@ -69,12 +70,13 @@ def main():
     if len(names) < 2:
         raise SystemExit(f"need 2+ cam_* videos in {a.rec}")
     a.ref = a.ref or names[0]
-    print(f"{len(names)} cameras, reading {a.seconds:.0f} s of motion each ...")
+    span = a.seconds * (2 if a.check_drift else 1)
+    print(f"{len(names)} cameras, reading {span:.0f} s of motion each ...")
     with ProcessPoolExecutor(a.workers) as ex:
-        out = dict(zip(names, ex.map(motion_signal, [vids[n] for n in names], [a.seconds] * len(names),
+        out = dict(zip(names, ex.map(motion_signal, [vids[n] for n in names], [span] * len(names),
                                      [a.start] * len(names))))
     sig = {n: (o[1], o[2]) for n, o in out.items()}
-    off, res, used = fit(names, sig, a)
+    off, res, used = fit(names, sig, a, a.start, a.start + a.seconds)
     per_cam = {n: [abs(r) * 1000 for k, r in res.items() if n in k] for n in names}
     print(f"\n{'camera':8s} {'offset s':>9s} {'pairs':>6s} {'residual ms':>12s}")
     for n in names:
@@ -94,13 +96,15 @@ def main():
         print(f"\nNOT SYNCED (no camera pair with enough shared motion): {bad}. More --seconds with people "
               f"walking, or a larger --max-lag; their times files were not written.")
     if a.check_drift:
-        mid = a.start + a.seconds / 2
-        o1, _, _ = fit(names, sig, a, a.start, mid)
-        o2, _, _ = fit(names, sig, a, mid, a.start + a.seconds)
-        print("\ndrift: offset (second half) - offset (first half), ms")
+        o2, res2, _ = fit(names, sig, a, a.start + a.seconds, a.start + 2 * a.seconds)
+        print(f"\ndrift: offset from the next {a.seconds:.0f} s minus offset above, ms "
+              f"(a few ms is noise; tens of ms or more = that camera's clock drifts or it dropped frames)")
         for n in names:
-            if o1.get(n) is not None and o2.get(n) is not None:
-                print(f"  {n:8s} {1000 * (o2[n] - o1[n]):+7.1f}")
+            pairs = sum(n in k for k in res2)
+            if off[n] is not None and o2.get(n) is not None:
+                print(f"  {n:8s} {1000 * (o2[n] - off[n]):+8.1f}   ({pairs} pairs)")
+            else:
+                print(f"  {n:8s} {'-':>8s}   (no reliable pair in the second window: too little motion, or the recording ends)")
     print(f"\ntimes files written next to the videos; common clock = {a.ref}'s")
 
 
