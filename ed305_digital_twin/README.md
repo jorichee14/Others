@@ -5,7 +5,7 @@ Indoor Camera User Guide") for collaborative perception. The plan is
 [PLAN.md](PLAN.md); camera placement step by step is [WORKFLOW.md](WORKFLOW.md); what runs on the robots' Jetson Orin vs the server in the dynamic twin is
 [DATAFLOW.md](DATAFLOW.md); how to improve the Gaussian map's appearance without
 loosening the geometry is [APPEARANCE.md](APPEARANCE.md); fine-tuning YOLO on the cameras' recordings is
-[DETECTOR.md](DETECTOR.md); one identity per person from all cameras and other
+[DETECTOR.md](DETECTOR.md); every command in order is [RUNBOOK.md](RUNBOOK.md); one identity per person from all cameras and other
 sensors is [TRACKING.md](TRACKING.md). v1 so far: coverage / blind spots, placement within each mount's range, and measuring that range from video.
 
 ```
@@ -33,6 +33,9 @@ make_room_cameras.py   command line: cameras in the LiDAR map + intrinsics + flo
 motion_sync.py         command line: recordings on one clock from the motion the cameras see (no flash)
 mosaic.py              command line: all cameras in one video on the common clock (+ detections / tracking)
 ed305/sync.py          motion signals, pairwise offsets, the global fit
+run_pipeline.sh        one recording session end to end: sync, track + trust + video, figures
+make_figures.py        paper figures from a run (floor paths, trust over time, mosaic frame)
+make_schematics.py     framework and roadmap schematics as SVG / PDF / PNG (docs/figures/)
 room_track.py          command line: room tracker, one identity per person from any sensors
 ed305/tracking/        sensor contract, tracker (tracklets + global linking), adapters, IDF1, simulated room
 configs/sensors_example.yaml   sensor models (radar, robot pose), the door, tracker settings
